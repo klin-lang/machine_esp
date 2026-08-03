@@ -2,7 +2,7 @@
 
 ESP32 port of a MicroPython-shaped **`machine`** API for [Klin](https://github.com/klin-lang/klin).
 
-Not a MicroPython port. No GC, no hidden heap. **`Pin` / `Pwm` use explicit MMIO**
+Not a MicroPython port. No GC, no hidden heap. **`Pin` / `Pwm` / `Rc` use explicit MMIO**
 (ESP32-C3 GPIO + IO_MUX + LEDC). Boot and flash use **minimal ESP-IDF** in the
 examples only — IDF is not part of the Klin package API.
 
@@ -11,14 +11,14 @@ targets [062](https://github.com/klin-lang/klin/blob/main/issues/062-targets-esp
 
 ## Status
 
-| Chip | Pin | Pwm | Example | Boot |
-|---|---|---|---|---|
-| **ESP32-C3** | `pin_out` / `pin_in` | `pwm_out(gpio, ch, tim, clk)` | `blink_c3`, `pwm_c3` | ESP-IDF v5.x |
-| Classic ESP32 (Xtensa), C6, S3 | later | — | — | — |
-| Freestanding (no IDF) | later | — | — | — |
+| Chip | Pin | Pwm | Rc | Example | Boot |
+|---|---|---|---|---|---|
+| **ESP32-C3** | `pin_out` / `pin_in` | `pwm_out` | `rc_out` | `blink_c3`, `pwm_c3`, `rc_c3` | ESP-IDF v5.x |
+| Classic ESP32 (Xtensa), C6, S3 | later | — | — | — | — |
+| Freestanding (no IDF) | later | — | — | — | — |
 
 Target board: **ESP32-C3-DevKitM-1** (onboard LED ≈ **GPIO8**).  
-`version()` → `2` (`@v0.2.0`).
+`version()` → `3` (`@v0.3.0`).
 
 ## Requirements
 
@@ -32,9 +32,11 @@ machine_esp/
   version.kl
   pin.kl
   pwm.kl                 # LEDC MMIO
-  pin_test.kl
+  rc.kl
+  pin_test.kl / rc_test.kl
 examples/blink_c3/       # Pin toggle
 examples/pwm_c3/         # LEDC fade on GPIO8
+examples/rc_c3/          # LEDC RC/servo sweep on GPIO8
 ```
 
 ## Usage — Pin
@@ -51,40 +53,49 @@ fn blink_main() {
 
 ## Usage — Pwm
 
-Same shape as [`machine_stm32`](https://github.com/klin-lang/machine_stm32) /
-[`machine_rp`](https://github.com/klin-lang/machine_rp): `freq` / `duty_u16` / `deinit`.
-Channel, timer, and LEDC clock are explicit (no IDF `ledc_*`).
-
 ```klin
 import "github/klin-lang/machine_esp" machine
 
 @[cexport, codename("klin_app_main")]
 fn pwm_main() {
-    // GPIO 8, LEDC ch 0, timer 0, APB 80 MHz (typical under IDF)
     let led = machine.pwm_out(8, 0, 0, 80000000)
     led.freq(1000)
     led.duty_u16(32768)
 }
 ```
 
-```sh
-klin get github/klin-lang/machine_esp@v0.2.0
+## Usage — Rc (servo / RC pulse)
+
+```klin
+import "github/klin-lang/machine_esp" machine
+
+@[cexport, codename("klin_app_main")]
+fn rc_main() {
+    let servo = machine.rc_out(8, 0, 0, 80000000, 50, 1000, 2000)
+    servo.out(50000, 0)
+    servo.out_f32(0.25, 0)
+    servo.pulse_us(1500)
+}
 ```
 
-## Pwm shape (shared with other `machine_*`)
+```sh
+klin get github/klin-lang/machine_esp@v0.3.0
+```
+
+## Pwm / Rc shape (shared with other `machine_*`)
 
 | Piece | Role |
 |---|---|
 | `pwm_out(gpio, ch, tim, ledc_clk_hz)` | factory — LEDC channel/timer explicit |
-| `freq(hz)` | frequency in Hz |
-| `duty_u16(d)` | duty `0..=65535` |
-| `deinit()` | clear `SIG_OUT_EN` |
+| `freq` / `duty_u16` / `deinit` | PWM |
+| `rc_out(…, freq_hz, us_min, us_max)` | servo/RC |
+| `out` / `out_f32` / `pulse_us` / `deinit` | position + trim / raw µs |
 
 ## Examples
 
 ```sh
 . $IDF_PATH/export.sh
-cd examples/blink_c3   # or examples/pwm_c3
+cd examples/blink_c3   # or examples/pwm_c3 / examples/rc_c3
 make emit KLIN=/path/to/klin/bin/klin.dart
 make build
 make flash
