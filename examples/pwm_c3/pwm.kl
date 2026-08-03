@@ -1,0 +1,34 @@
+// ESP32-C3-DevKitM-1 LED ≈ GPIO8 via LEDC PWM (machine_esp).
+// LEDC source clock: APB 80 MHz typical under ESP-IDF — pass explicitly.
+import "../../machine_esp" machine
+
+@[cexport, codename("klin_app_main")]
+fn pwm_main() {
+    // GPIO 8, LEDC channel 0, timer 0, APB 80 MHz
+    let led = machine.pwm_out(8, 0, 0, 80000000)
+    led.freq(1000)
+    while true {
+        let mut d: i32 = 0
+        while d <= 65535 {
+            led.duty_u16(d)
+            let mut i: i32 = 0
+            while i < 8000 {
+                i = i + 1
+            }
+            d = d + 1024
+        }
+        d = 65535
+        while d >= 0 {
+            led.duty_u16(d)
+            let mut i: i32 = 0
+            while i < 8000 {
+                i = i + 1
+            }
+            d = d - 1024
+        }
+    }
+}
+
+fn main() {
+    pwm_main()
+}

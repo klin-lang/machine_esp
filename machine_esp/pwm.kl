@@ -1,0 +1,157 @@
+/// ESP32-C3 LEDC PWM (MMIO). Same shape as machine_stm32 / machine_rp:
+/// freq / duty_u16 / deinit. No IDF ledc_* driver.
+/// Caller passes GPIO, LEDC channel (0..=5), timer (0..=3), and LEDC source
+/// clock Hz (typically APB 80_000_000 under IDF).
+module machine_esp
+
+pub struct Pwm {
+    conf0: *mut volatile i32
+    duty: *mut volatile i32
+    conf1: *mut volatile i32
+    timer_conf: *mut volatile i32
+    duty_res: i32
+    ledc_clk_hz: i32
+}
+
+fn system_ledc_enable() {
+    // SYSTEM_PERIP_CLK_EN0 / RST_EN0 — LEDC bit 11
+    let clk_en = cast(*mut volatile i32, 0x600C0010)
+    *clk_en = *clk_en | (1 << 11)
+    let rst_en = cast(*mut volatile i32, 0x600C0018)
+    *rst_en = *rst_en & ~(1 << 11)
+}
+
+fn ledc_select_apb() {
+    // LEDC_CONF_REG: APB_CLK_SEL=1, CLK_EN=1
+    let conf = cast(*mut volatile i32, 0x600190D0)
+    *conf = 1 | (1 << 31)
+}
+
+fn configure_pad_ledc(num: i32, ch: i32) {
+    gpio_clock_enable()
+
+    let mux = io_mux_reg(num)
+    let mut v = *mux
+    v = v & ~(7 << 12)
+    v = v | (1 << 12)
+    v = v & ~(3 << 10)
+    v = v | (2 << 10)
+    v = v & ~(1 << 9)
+    v = v & ~(1 << 8)
+    v = v & ~(1 << 7)
+    *mux = v
+
+    // GPIO matrix: OUT_SEL = LEDC_LS_SIG_OUTn (45+ch), OEN from peripheral
+    let cfg = func_out_sel_cfg(num)
+    *cfg = 45 + ch
+
+    let mask = 1 << num
+    let en_set = cast(*mut volatile i32, 0x60004024)
+    *en_set = mask
+}
+
+fn max_duty(duty_res: i32): i32 {
+    let mut m: i32 = 1
+    let mut i: i32 = 0
+    while i < duty_res {
+        m = m * 2
+        i = i + 1
+    }
+    return m
+}
+
+/// Configure GPIO `num` as LEDC PWM on channel `ch` (0..=5), timer `tim`
+/// (0..=3). `ledc_clk_hz` is the LEDC source clock (APB when using default
+/// APB_CLK_SEL — explicit, no clock-tree read).
+pub fn pwm_out(num: i32, ch: i32, tim: i32, ledc_clk_hz: i32): Pwm {
+    system_ledc_enable()
+    ledc_select_apb()
+    configure_pad_ledc(num, ch)
+
+    let ch_base = 0x60019000 + ch * 0x14
+    let conf0 = cast(*mut volatile i32, ch_base)
+    let hpoint = cast(*mut volatile i32, ch_base + 0x04)
+    let duty = cast(*mut volatile i32, ch_base + 0x08)
+    let conf1 = cast(*mut volatile i32, ch_base + 0x0C)
+    let timer_conf = cast(*mut volatile i32, 0x600190A0 + tim * 0x08)
+
+    // 13-bit duty resolution (0..8192) — fits C3 max 14, good for duty_u16 map.
+    let duty_res: i32 = 13
+
+    *hpoint = 0
+    *duty = 0
+    // TIMER_SEL + SIG_OUT_EN
+    *conf0 = (tim & 3) | (1 << 2)
+
+    let pwm = Pwm{
+        conf0: conf0,
+        duty: duty,
+        conf1: conf1,
+        timer_conf: timer_conf,
+        duty_res: duty_res,
+        ledc_clk_hz: ledc_clk_hz
+    }
+    pwm.freq(1000)
+    pwm.duty_u16(0)
+    // PARA_UP + DUTY_START
+    *conf0 = *(pwm.conf0) | (1 << 4)
+    *conf1 = 1 << 31
+    return pwm
+}
+
+/// Set PWM frequency in Hz using `ledc_clk_hz` from `pwm_out`.
+pub fn (p: Pwm) freq(hz: i32) {
+    let mut f = hz
+    if f < 1 {
+        f = 1
+    }
+    let mut clk = p.ledc_clk_hz
+    if clk < 1 {
+        clk = 1
+    }
+    let md = max_duty(p.duty_res)
+    let mut per = f * md
+    if per < 1 {
+        per = 1
+    }
+    // div_param = (clk * 256) / (f * 2^duty_res)  — 8 fractional bits
+    let q = clk / per
+    let r = clk - q * per
+    let mut div_param = q * 256 + (r * 256) / per
+    if div_param < 256 {
+        div_param = 256
+    }
+    if div_param > 262143 {
+        div_param = 262143
+    }
+    // DUTY_RES | CLK_DIV<<4; clear RST (bit 23); PARA_UP (bit 25)
+    let conf = (p.duty_res & 15) | ((div_param & 262143) << 4)
+    *(p.timer_conf) = conf
+    *(p.timer_conf) = conf | (1 << 25)
+}
+
+/// Duty cycle: 0 = off, 65535 ≈ full on (MicroPython-style).
+pub fn (p: Pwm) duty_u16(duty: i32) {
+    let mut d = duty
+    if d < 0 {
+        d = 0
+    }
+    if d > 65535 {
+        d = 65535
+    }
+    let md = max_duty(p.duty_res)
+    let mut level = (d * md) / 65536
+    if level > md {
+        level = md
+    }
+    // Hardware stores duty << 4
+    *(p.duty) = level << 4
+    *(p.conf0) = *(p.conf0) | (1 << 4)
+    *(p.conf1) = 1 << 31
+}
+
+/// Stop signal output on this channel (does not restore GPIO FUNCSEL).
+pub fn (p: Pwm) deinit() {
+    *(p.conf0) = *(p.conf0) & ~(1 << 2)
+    *(p.conf0) = *(p.conf0) | (1 << 4)
+}
