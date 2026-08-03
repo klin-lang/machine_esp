@@ -1,0 +1,122 @@
+// ESP32-C3 GPIO Pin (MMIO). Explicit pad/matrix setup — no IDF gpio driver.
+// Addresses: GPIO 0x60004000, IO_MUX 0x60009000 (ESP32-C3 TRM).
+// Flat GPIO numbers 0..21 (no Port enum).
+module machine_esp
+
+pub struct Pin {
+    out: *mut volatile i32
+    out_set: *mut volatile i32
+    out_clr: *mut volatile i32
+    gpio_in: *mut volatile i32
+    mask: i32
+}
+
+fn gpio_clock_enable() {
+    // GPIO_CLOCK_GATE_REG — clk_en bit 0
+    let gate = cast(*mut volatile i32, 0x6000462C)
+    *gate = *gate | 1
+}
+
+fn io_mux_reg(num: i32): *mut volatile i32 {
+    // IO_MUX_GPIOn_REG at 0x60009004 + 4*n
+    return cast(*mut volatile i32, 0x60009004 + num * 4)
+}
+
+fn func_out_sel_cfg(num: i32): *mut volatile i32 {
+    // GPIO_FUNCn_OUT_SEL_CFG_REG at 0x60004554 + 4*n
+    return cast(*mut volatile i32, 0x60004554 + num * 4)
+}
+
+fn configure_pad_gpio(num: i32, input: i32) {
+    gpio_clock_enable()
+
+    // MCU_SEL = 1 (GPIO), FUN_DRV = 2 (~20 mA); FUN_IE when input != 0
+    let mux = io_mux_reg(num)
+    let mut v = *mux
+    v = v & ~(7 << 12)
+    v = v | (1 << 12)
+    v = v & ~(3 << 10)
+    v = v | (2 << 10)
+    if input != 0 {
+        v = v | (1 << 9)
+    } else {
+        v = v & ~(1 << 9)
+    }
+    // clear pull-up / pull-down (FUN_WPU bit8, FUN_WPD bit7)
+    v = v & ~(1 << 8)
+    v = v & ~(1 << 7)
+    *mux = v
+
+    // Simple GPIO output path: OUT_SEL = 0x80, OEN_SEL = 1 (bit 9)
+    let cfg = func_out_sel_cfg(num)
+    *cfg = 0x80 | (1 << 9)
+}
+
+// Configure GPIO `num` as push-pull output (simple GPIO via matrix).
+pub fn pin_out(num: i32): Pin {
+    configure_pad_gpio(num, 0)
+
+    let mask = 1 << num
+    let en_set = cast(*mut volatile i32, 0x60004024)
+    *en_set = mask
+
+    let out = cast(*mut volatile i32, 0x60004004)
+    let out_set = cast(*mut volatile i32, 0x60004008)
+    let out_clr = cast(*mut volatile i32, 0x6000400C)
+    let gpio_in = cast(*mut volatile i32, 0x6000403C)
+    return Pin{
+        out: out,
+        out_set: out_set,
+        out_clr: out_clr,
+        gpio_in: gpio_in,
+        mask: mask
+    }
+}
+
+// Configure GPIO `num` as floating input.
+pub fn pin_in(num: i32): Pin {
+    configure_pad_gpio(num, 1)
+
+    let mask = 1 << num
+    let en_clr = cast(*mut volatile i32, 0x60004028)
+    *en_clr = mask
+
+    let out = cast(*mut volatile i32, 0x60004004)
+    let out_set = cast(*mut volatile i32, 0x60004008)
+    let out_clr = cast(*mut volatile i32, 0x6000400C)
+    let gpio_in = cast(*mut volatile i32, 0x6000403C)
+    return Pin{
+        out: out,
+        out_set: out_set,
+        out_clr: out_clr,
+        gpio_in: gpio_in,
+        mask: mask
+    }
+}
+
+pub fn (p: Pin) high() {
+    *(p.out_set) = p.mask
+}
+
+pub fn (p: Pin) low() {
+    *(p.out_clr) = p.mask
+}
+
+pub fn (p: Pin) toggle() {
+    *(p.out) = *(p.out) ^ p.mask
+}
+
+pub fn (p: Pin) set(v: i32) {
+    if v != 0 {
+        p.high()
+    } else {
+        p.low()
+    }
+}
+
+pub fn (p: Pin) value(): i32 {
+    if (*(p.gpio_in) & p.mask) != 0 {
+        return 1
+    }
+    return 0
+}

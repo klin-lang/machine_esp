@@ -1,0 +1,21 @@
+// ESP32-C3-DevKitM-1 onboard LED ≈ GPIO8, driven through machine_esp.Pin.
+// Boot/flash via ESP-IDF (see Makefile / README) — Klin only does MMIO Pin.
+import "../../machine_esp" machine
+
+@[cexport, codename("klin_app_main")]
+fn blink_main() {
+    let led = machine.pin_out(8)
+    while true {
+        led.toggle()
+        // Busy-wait (CPU freq depends on IDF sdkconfig; tune on hardware).
+        let mut i: i32 = 0
+        while i < 2000000 {
+            i = i + 1
+        }
+    }
+}
+
+// Required by Klin checker; stripped to static when linking under ESP-IDF.
+fn main() {
+    blink_main()
+}
