@@ -1,0 +1,32 @@
+// ESP32-C3 DevKitM-1 GPIO8 — RC/servo sweep (LEDC ch0 / timer0).
+// APB 80 MHz. Typical servo: 50 Hz, 1000..=2000 µs.
+import "../../machine_esp" machine
+
+@[cexport, codename("klin_app_main")]
+fn rc_main() {
+    let servo = machine.rc_out(8, 0, 0, 80000000, 50, 1000, 2000)
+    while true {
+        let mut pos: i32 = 0
+        while pos <= 100000 {
+            servo.out(pos, 0)
+            let mut i: i32 = 0
+            while i < 80000 {
+                i = i + 1
+            }
+            pos = pos + 5000
+        }
+        pos = 100000
+        while pos >= 0 {
+            servo.out(pos, 0)
+            let mut i: i32 = 0
+            while i < 80000 {
+                i = i + 1
+            }
+            pos = pos - 5000
+        }
+    }
+}
+
+fn main() {
+    rc_main()
+}
