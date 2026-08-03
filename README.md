@@ -1,13 +1,13 @@
 # machine_esp
 
-ESP32 port of a MicroPython-shaped **`machine`** API for [Klin](https://github.com/MrHIDEn/klin).
+ESP32 port of a MicroPython-shaped **`machine`** API for [Klin](https://github.com/klin-lang/klin).
 
 Not a MicroPython port. No GC, no hidden heap. **`Pin` uses explicit MMIO** (ESP32-C3
 GPIO + IO_MUX). Boot and flash use **minimal ESP-IDF** in the example only — IDF is
 not part of the Klin package.
 
-Decision / catalog: [Klin issue 061](https://github.com/MrHIDEn/klin/blob/main/issues/061-micropython-machine-api.md),
-targets [062](https://github.com/MrHIDEn/klin/blob/main/issues/062-targets-esp-rp.md).
+Decision / catalog: [Klin issue 061](https://github.com/klin-lang/klin/blob/main/issues/061-micropython-machine-api.md),
+targets [062](https://github.com/klin-lang/klin/blob/main/issues/062-targets-esp-rp.md).
 
 ## Status
 
@@ -21,7 +21,7 @@ Target board for the blink example: **ESP32-C3-DevKitM-1** (onboard LED ≈ **GP
 
 ## Requirements
 
-- [Klin](https://github.com/MrHIDEn/klin) compiler (`klin` or `dart run path/to/bin/klin.dart`)
+- [Klin](https://github.com/klin-lang/klin) compiler (`klin` or `dart run path/to/bin/klin.dart`)
 - For the blink example: [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/stable/esp32c3/get-started/) **v5.x** with `esp32c3` target (`IDF_PATH` exported)
 
 ## Layout
@@ -37,7 +37,7 @@ examples/blink_c3/       # DevKitM-1 GPIO8 + minimal IDF app
 ## Usage
 
 ```klin
-import "github/mrhiden/machine_esp" machine
+import "github/klin-lang/machine_esp" machine
 
 @[cexport, codename("klin_app_main")]
 fn blink_main() {
@@ -51,7 +51,7 @@ fn main() {
 ```
 
 ```sh
-klin get github/mrhiden/machine_esp@v0.1.0
+klin get github/klin-lang/machine_esp@v0.1.0
 ```
 
 Local / in-repo example:
