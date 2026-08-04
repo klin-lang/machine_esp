@@ -1,0 +1,17 @@
+// ESP32-C3 ADC1 CH0 = GPIO0 → LEDC PWM brightness on GPIO8.
+// No hardware DAC on C3.
+import "../../machine_esp" machine
+
+@[cexport, codename("klin_app_main")]
+fn adc_main() {
+    let adc = machine.adc_out(0, 0)
+    let led = machine.pwm_out(8, 0, 0, 80000000)
+    led.freq(1000)
+    while true {
+        led.duty_u16(adc.read_u16())
+    }
+}
+
+fn main() {
+    adc_main()
+}

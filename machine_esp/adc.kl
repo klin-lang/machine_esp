@@ -1,0 +1,122 @@
+/// ESP32-C3 ADC1 oneshot (MMIO via APB_SARADC). Channels 0..=4 → GPIO0..=4.
+/// No hardware DAC on ESP32-C3 — do not expect a `Dac` API on this chip.
+module machine_esp
+
+pub struct Adc {
+    ctrl: *mut volatile i32
+    onetime: *mut volatile i32
+    data: *mut volatile i32
+    int_raw: *mut volatile i32
+    int_clr: *mut volatile i32
+    channel: i32
+}
+
+fn adc_u12_to_u16(raw: i32): i32 {
+    let mut r = raw
+    if r < 0 {
+        r = 0
+    }
+    if r > 4095 {
+        r = 4095
+    }
+    return (r * 65535) / 4095
+}
+
+fn adc_enable_clock() {
+    let clk_en = cast(*mut volatile i32, 0x600C0010)
+    let rst_en = cast(*mut volatile i32, 0x600C0018)
+    // APB_SARADC bit 28
+    *clk_en = *clk_en | (1 << 28)
+    *rst_en = *rst_en | (1 << 28)
+    *rst_en = *rst_en & ~(1 << 28)
+}
+
+fn adc_pad_analog(num: i32) {
+    gpio_clock_enable()
+    let mux = io_mux_reg(num)
+    let mut v = *mux
+    // MCU_SEL=1 (GPIO), FUN_IE=0, no pulls
+    v = v & ~(7 << 12)
+    v = v | (1 << 12)
+    v = v & ~(1 << 9)
+    v = v & ~(1 << 8)
+    v = v & ~(1 << 7)
+    *mux = v
+    // disconnect digital out
+    let cfg = func_out_sel_cfg(num)
+    *cfg = 0x80 | (1 << 9)
+    let en_clr = cast(*mut volatile i32, 0x60004028)
+    *en_clr = 1 << num
+}
+
+/// Configure ADC1 on GPIO `num` for `channel` (0..=4; typically num==channel).
+/// Returns 12-bit converter. Attenuation defaults to 0 dB (full-scale ~0.8 V).
+pub fn adc_out(num: i32, channel: i32): Adc {
+    adc_enable_clock()
+    let mut ch = channel
+    if ch < 0 {
+        ch = 0
+    }
+    if ch > 4 {
+        ch = 4
+    }
+    adc_pad_analog(num)
+
+    let base = 0x60040000
+    let ctrl = cast(*mut volatile i32, base)
+    let onetime = cast(*mut volatile i32, base + 0x20)
+    let data = cast(*mut volatile i32, base + 0x2C)
+    let int_raw = cast(*mut volatile i32, base + 0x44)
+    let int_clr = cast(*mut volatile i32, base + 0x4C)
+    let clkm = cast(*mut volatile i32, base + 0x54)
+
+    // power on: SAR_CLK_GATED | XPD_SAR_FORCE=3; SAR_CLK_DIV=1
+    *ctrl = (1 << 6) | (3 << 27) | (1 << 7)
+    // controller clock: CLK_EN | CLK_SEL=APB(2) | DIV_NUM=15
+    *clkm = (1 << 20) | (2 << 21) | 15
+    let mut i: i32 = 0
+    while i < 100 {
+        i = i + 1
+    }
+
+    return Adc{
+        ctrl: ctrl,
+        onetime: onetime,
+        data: data,
+        int_raw: int_raw,
+        int_clr: int_clr,
+        channel: ch
+    }
+}
+
+/// Blocking single conversion — raw 12-bit result `0..=4095`.
+pub fn (a: Adc) read_u12(): i32 {
+    // ADC1_ONETIME | channel | atten0; unit1 in channel field bits[3:3] of nibble
+    // onetime_channel = (adc_unit<<3)|channel with ADC_UNIT_1=0 → just channel
+    let ch = a.channel & 15
+    *(a.onetime) = (1 << 31) | (ch << 25)
+    *(a.int_clr) = 1 << 31
+    // START pulse — hold briefly
+    *(a.onetime) = *(a.onetime) | (1 << 29)
+    let mut i: i32 = 0
+    while i < 20 {
+        i = i + 1
+    }
+    *(a.onetime) = *(a.onetime) & ~(1 << 29)
+    while (*(a.int_raw) & (1 << 31)) == 0 {
+    }
+    *(a.int_clr) = 1 << 31
+    return *(a.data) & 4095
+}
+
+/// MicroPython-style scale: `0..=65535` from 12-bit raw.
+pub fn (a: Adc) read_u16(): i32 {
+    return adc_u12_to_u16(a.read_u12())
+}
+
+/// Power down SAR (does not restore GPIO).
+pub fn (a: Adc) deinit() {
+    // XPD_SAR_FORCE=2 (SW off), clear gated
+    *(a.ctrl) = 2 << 27
+    *(a.onetime) = 0
+}

@@ -1,0 +1,21 @@
+module machine_esp
+
+import testing
+
+fn test_spi_clkcnt_n_1mhz_apb80() {
+    // round(80e6 / 1e6) = 80 → clamp to 64
+    testing.assert_eq_i32(spi_clkcnt_n(80000000, 1000000), 64)
+}
+
+fn test_spi_clkcnt_n_fast() {
+    testing.assert_eq_i32(spi_clkcnt_n(80000000, 40000000), 2)
+}
+
+fn test_spi_clock_reg_fields() {
+    // n=2 → CLOCK = (1<<12) | (0<<6) | 1
+    testing.assert_eq_i32(spi_clock_reg(80000000, 40000000), (1 << 12) | 1)
+}
+
+fn test_spi_base_map() {
+    testing.assert_eq_i32(spi_base(2), 0x60024000)
+}

@@ -1,0 +1,142 @@
+/// ESP32-C3 UART (MMIO). UART0 / UART1 — no IDF uart_* driver.
+/// Caller passes `uart_clk_hz` (APB when `SCLK_SEL=1`) and baud explicitly.
+module machine_esp
+
+pub struct Uart {
+    fifo: *mut volatile i32
+    status: *mut volatile i32
+    conf0: *mut volatile i32
+    clk_conf: *mut volatile i32
+}
+
+/// `(uart_clk_hz * 16) / baud` — integer+frag packed as `int<<4 | frag`.
+fn uart_clkdiv16(uart_clk_hz: i32, baud: i32): i32 {
+    let mut clk = uart_clk_hz
+    if clk < 1 {
+        clk = 1
+    }
+    let mut b = baud
+    if b < 1 {
+        b = 1
+    }
+    return (clk * 16) / b
+}
+
+fn uart_clkdiv_int(uart_clk_hz: i32, baud: i32): i32 {
+    return uart_clkdiv16(uart_clk_hz, baud) >> 4
+}
+
+fn uart_clkdiv_frag(uart_clk_hz: i32, baud: i32): i32 {
+    return uart_clkdiv16(uart_clk_hz, baud) & 15
+}
+
+fn uart_base(uart: i32): i32 {
+    if uart == 1 {
+        return 0x60010000
+    }
+    return 0x60000000
+}
+
+fn uart_enable_clock(uart: i32) {
+    // SYSTEM_PERIP_CLK_EN0 / RST_EN0 at 0x600C0010 / 0x600C0018
+    let clk_en = cast(*mut volatile i32, 0x600C0010)
+    let rst_en = cast(*mut volatile i32, 0x600C0018)
+    // UART_MEM bit 24
+    *clk_en = *clk_en | (1 << 24)
+    *rst_en = *rst_en & ~(1 << 24)
+    if uart == 1 {
+        // UART1 bit 5
+        *clk_en = *clk_en | (1 << 5)
+        *rst_en = *rst_en | (1 << 5)
+        *rst_en = *rst_en & ~(1 << 5)
+        return
+    }
+    // UART0 bit 2
+    *clk_en = *clk_en | (1 << 2)
+    *rst_en = *rst_en | (1 << 2)
+    *rst_en = *rst_en & ~(1 << 2)
+}
+
+/// Configure UART `uart` (0/1) on TX/RX GPIOs. 8N1, APB sclk (`SCLK_SEL=1`).
+/// DevKit USB-JTAG is separate — UART0 often TX=21 / RX=20.
+pub fn uart_out(uart: i32, tx: i32, rx: i32, uart_clk_hz: i32, baud: i32): Uart {
+    uart_enable_clock(uart)
+    let mut u = uart
+    if u != 1 {
+        u = 0
+    }
+    // U0TXD/U0RXD = 6; U1TXD/U1RXD = 9
+    let mut sig = 6
+    if u == 1 {
+        sig = 9
+    }
+    matrix_out(tx, sig)
+    matrix_in(rx, sig)
+
+    let base = uart_base(u)
+    let fifo = cast(*mut volatile i32, base)
+    let clkdiv = cast(*mut volatile i32, base + 0x14)
+    let status = cast(*mut volatile i32, base + 0x1C)
+    let conf0 = cast(*mut volatile i32, base + 0x20)
+    let clk_conf = cast(*mut volatile i32, base + 0x78)
+    let id = cast(*mut volatile i32, base + 0x80)
+
+    // APB sclk: SCLK_SEL=1, SCLK_EN|TX|RX, DIV_NUM=0 (÷1)
+    *clk_conf = (1 << 22) | (1 << 24) | (1 << 25) | (1 << 20)
+    let div_int = uart_clkdiv_int(uart_clk_hz, baud)
+    let frag = uart_clkdiv_frag(uart_clk_hz, baud)
+    *clkdiv = (div_int & 4095) | ((frag & 15) << 20)
+    // 8N1; pulse FIFO reset
+    *conf0 = (3 << 2) | (1 << 4) | (1 << 17) | (1 << 18)
+    *conf0 = (3 << 2) | (1 << 4)
+    // UART_UPDATE
+    *id = *id | (1 << 31)
+    while (*id & (1 << 31)) != 0 {
+    }
+
+    return Uart{ fifo: fifo, status: status, conf0: conf0, clk_conf: clk_conf }
+}
+
+/// Blocking write one byte (`b` masked to 8 bits). Waits for TX FIFO room.
+pub fn (u: Uart) write_u8(b: i32) {
+    // TXFIFO_CNT in bits 16..25 — wait while nearly full
+    while ((*(u.status) >> 16) & 1023) >= 127 {
+    }
+    *(u.fifo) = b & 255
+}
+
+/// True when RXFIFO_CNT > 0.
+pub fn (u: Uart) any(): bool {
+    return (*(u.status) & 1023) != 0
+}
+
+/// Blocking read one byte (0..=255).
+pub fn (u: Uart) read_u8(): i32 {
+    while (*(u.status) & 1023) == 0 {
+    }
+    return *(u.fifo) & 255
+}
+
+/// Non-blocking read: byte 0..=255, or −1 if RX empty.
+pub fn (u: Uart) try_read_u8(): i32 {
+    if (*(u.status) & 1023) == 0 {
+        return 0 - 1
+    }
+    return *(u.fifo) & 255
+}
+
+/// Blocking write of every byte in `buf`.
+pub fn (u: Uart) write(buf: []u8) {
+    let mut i: i32 = 0
+    while i < buf.len {
+        while ((*(u.status) >> 16) & 1023) >= 127 {
+        }
+        *(u.fifo) = u8_as_i32(buf[i])
+        i = i + 1
+    }
+}
+
+/// Disable UART clocks (does not restore GPIO matrix).
+pub fn (u: Uart) deinit() {
+    *(u.clk_conf) = 0
+}

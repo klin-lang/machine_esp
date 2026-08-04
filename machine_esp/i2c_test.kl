@@ -1,0 +1,17 @@
+module machine_esp
+
+import testing
+
+fn test_i2c_clkm_div_100k_xtal40() {
+    // 40e6 / (100000 * 1024) + 1 = 0 + 1 = 1
+    testing.assert_eq_i32(i2c_clkm_div(40000000, 100000), 1)
+}
+
+fn test_i2c_half_cycle_100k_xtal40() {
+    // sclk=40e6 / 1; half = 40e6/100000/2 = 200
+    testing.assert_eq_i32(i2c_half_cycle(40000000, 100000), 200)
+}
+
+fn test_i2c_base_map() {
+    testing.assert_eq_i32(i2c_base(0), 0x60013000)
+}

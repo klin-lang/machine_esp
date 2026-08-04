@@ -3,6 +3,17 @@
 // Flat GPIO numbers 0..21 (no Port enum).
 module machine_esp
 
+/// Klin MVP: no `cast(i32, u8)` — alias through a little-endian byte buffer.
+fn u8_as_i32(b: u8): i32 {
+    let mut tmp: [4]u8
+    tmp[0] = b
+    tmp[1] = 0
+    tmp[2] = 0
+    tmp[3] = 0
+    let p = cast(*i32, &tmp[0])
+    return *p
+}
+
 pub struct Pin {
     out: *mut volatile i32
     out_set: *mut volatile i32
@@ -25,6 +36,71 @@ fn io_mux_reg(num: i32): *mut volatile i32 {
 fn func_out_sel_cfg(num: i32): *mut volatile i32 {
     // GPIO_FUNCn_OUT_SEL_CFG_REG at 0x60004554 + 4*n
     return cast(*mut volatile i32, 0x60004554 + num * 4)
+}
+
+fn func_in_sel_cfg(sig: i32): *mut volatile i32 {
+    // GPIO_FUNCn_IN_SEL_CFG_REG at 0x60004154 + 4*sig
+    return cast(*mut volatile i32, 0x60004154 + sig * 4)
+}
+
+/// Route peripheral output `sig` onto GPIO `num` (OE from peripheral).
+fn matrix_out(num: i32, sig: i32) {
+    gpio_clock_enable()
+    let mux = io_mux_reg(num)
+    let mut v = *mux
+    v = v & ~(7 << 12)
+    v = v | (1 << 12)
+    v = v & ~(3 << 10)
+    v = v | (2 << 10)
+    v = v & ~(1 << 9)
+    v = v & ~(1 << 8)
+    v = v & ~(1 << 7)
+    *mux = v
+    let cfg = func_out_sel_cfg(num)
+    *cfg = sig
+    let en_set = cast(*mut volatile i32, 0x60004024)
+    *en_set = 1 << num
+}
+
+/// Route GPIO `num` into peripheral input `sig` (FUN_IE on).
+fn matrix_in(num: i32, sig: i32) {
+    gpio_clock_enable()
+    let mux = io_mux_reg(num)
+    let mut v = *mux
+    v = v & ~(7 << 12)
+    v = v | (1 << 12)
+    v = v & ~(3 << 10)
+    v = v | (2 << 10)
+    v = v | (1 << 9)
+    v = v & ~(1 << 8)
+    v = v & ~(1 << 7)
+    *mux = v
+    // SIG_IN_SEL | gpio
+    let cfg = func_in_sel_cfg(sig)
+    *cfg = (1 << 6) | (num & 31)
+    let en_clr = cast(*mut volatile i32, 0x60004028)
+    *en_clr = 1 << num
+}
+
+/// Bidirectional open-drain pad (I2C): matrix out+in, pull-up, OE from peri.
+fn matrix_od_pu(num: i32, sig: i32) {
+    gpio_clock_enable()
+    let mux = io_mux_reg(num)
+    let mut v = *mux
+    v = v & ~(7 << 12)
+    v = v | (1 << 12)
+    v = v & ~(3 << 10)
+    v = v | (2 << 10)
+    v = v | (1 << 9)
+    v = v | (1 << 8)
+    v = v & ~(1 << 7)
+    *mux = v
+    let out = func_out_sel_cfg(num)
+    *out = sig
+    let inp = func_in_sel_cfg(sig)
+    *inp = (1 << 6) | (num & 31)
+    let en_set = cast(*mut volatile i32, 0x60004024)
+    *en_set = 1 << num
 }
 
 fn configure_pad_gpio(num: i32, input: i32) {
