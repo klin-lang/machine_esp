@@ -1,0 +1,21 @@
+module machine_esp
+
+import testing
+
+fn test_uart_clkdiv_115200_apb80() {
+    // (80e6 * 16) / 115200 = 11111 → int=694, frag=7
+    testing.assert_eq_i32(uart_clkdiv_int(80000000, 115200), 694)
+    testing.assert_eq_i32(uart_clkdiv_frag(80000000, 115200), 7)
+}
+
+fn test_uart_clkdiv_9600() {
+    testing.assert_eq_i32(uart_clkdiv_int(80000000, 9600), 8333)
+    testing.assert_eq_i32(uart_clkdiv_frag(80000000, 9600), 5)
+}
+
+fn test_uart_base_map() {
+    testing.assert_eq_i32(uart_base(0), 0x60000000)
+    testing.assert_eq_i32(uart_base(1), 0x60010000)
+    // unknown → UART0
+    testing.assert_eq_i32(uart_base(99), 0x60000000)
+}

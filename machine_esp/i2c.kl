@@ -1,0 +1,244 @@
+/// ESP32-C3 I2C0 (MMIO). Only one external I2C controller (`i2c` must be 0).
+/// No hidden clock — caller passes `i2c_clk_hz` (XTAL/APB source) and `freq_hz`.
+module machine_esp
+
+pub struct I2c {
+    base: i32
+    ctr: *mut volatile i32
+    data: *mut volatile i32
+    int_clr: *mut volatile i32
+    int_raw: *mut volatile i32
+    fifo_conf: *mut volatile i32
+}
+
+fn i2c_base(i2c: i32): i32 {
+    // C3 has I2C_EXT0 only
+    let _ = i2c
+    return 0x60013000
+}
+
+/// `clkm_div = source/(freq*1024) + 1` (ESP-IDF `i2c_ll_master_cal_bus_clk`).
+fn i2c_clkm_div(i2c_clk_hz: i32, freq_hz: i32): i32 {
+    let mut clk = i2c_clk_hz
+    if clk < 1 {
+        clk = 1
+    }
+    let mut f = freq_hz
+    if f < 1 {
+        f = 1
+    }
+    return clk / (f * 1024) + 1
+}
+
+/// Half SCL period in source/clkm ticks.
+fn i2c_half_cycle(i2c_clk_hz: i32, freq_hz: i32): i32 {
+    let mut clk = i2c_clk_hz
+    if clk < 1 {
+        clk = 1
+    }
+    let mut f = freq_hz
+    if f < 1 {
+        f = 1
+    }
+    let div = i2c_clkm_div(clk, f)
+    let sclk = clk / div
+    let mut half = sclk / f / 2
+    if half < 4 {
+        half = 4
+    }
+    return half
+}
+
+fn i2c_enable_clock() {
+    let clk_en = cast(*mut volatile i32, 0x600C0010)
+    let rst_en = cast(*mut volatile i32, 0x600C0018)
+    // I2C_EXT0 bit 7
+    *clk_en = *clk_en | (1 << 7)
+    *rst_en = *rst_en | (1 << 7)
+    *rst_en = *rst_en & ~(1 << 7)
+}
+
+fn i2c_cmd(op: i32, byte_num: i32, ack_en: i32, ack_exp: i32, ack_val: i32): i32 {
+    return (byte_num & 255) | ((ack_en & 1) << 8) | ((ack_exp & 1) << 9) | ((ack_val & 1) << 10) | ((op & 7) << 11)
+}
+
+fn i2c_comd(bus: I2c, idx: i32): *mut volatile i32 {
+    return cast(*mut volatile i32, bus.base + 0x58 + idx * 4)
+}
+
+fn i2c_wait_done(bus: I2c) {
+    // TRANS_COMPLETE_INT_RAW bit 7
+    while (*(bus.int_raw) & (1 << 7)) == 0 {
+    }
+    *(bus.int_clr) = 1 << 7
+}
+
+fn i2c_fifo_reset(bus: I2c) {
+    *(bus.fifo_conf) = *(bus.fifo_conf) | (1 << 12) | (1 << 13)
+    *(bus.fifo_conf) = *(bus.fifo_conf) & ~((1 << 12) | (1 << 13))
+}
+
+/// Configure I2C0 (`i2c` ignored / must be 0) on SDA/SCL GPIOs. 7-bit addresses.
+/// Open-drain + pull-up via IO_MUX. Typical: SDA=8 / SCL=9, XTAL 40 MHz.
+pub fn i2c_out(i2c: i32, sda: i32, scl: i32, i2c_clk_hz: i32, freq_hz: i32): I2c {
+    let _ = i2c
+    i2c_enable_clock()
+    // I2CEXT0_SCL=53, SDA=54
+    matrix_od_pu(scl, 53)
+    matrix_od_pu(sda, 54)
+
+    let base = i2c_base(0)
+    let scl_low = cast(*mut volatile i32, base)
+    let ctr = cast(*mut volatile i32, base + 0x04)
+    let to = cast(*mut volatile i32, base + 0x0C)
+    let fifo_conf = cast(*mut volatile i32, base + 0x18)
+    let data = cast(*mut volatile i32, base + 0x1C)
+    let int_raw = cast(*mut volatile i32, base + 0x20)
+    let int_clr = cast(*mut volatile i32, base + 0x24)
+    let sda_hold = cast(*mut volatile i32, base + 0x30)
+    let sda_sample = cast(*mut volatile i32, base + 0x34)
+    let scl_high = cast(*mut volatile i32, base + 0x38)
+    let scl_start_hold = cast(*mut volatile i32, base + 0x40)
+    let scl_rstart_setup = cast(*mut volatile i32, base + 0x44)
+    let scl_stop_hold = cast(*mut volatile i32, base + 0x48)
+    let scl_stop_setup = cast(*mut volatile i32, base + 0x4C)
+    let filter = cast(*mut volatile i32, base + 0x50)
+    let clk_conf = cast(*mut volatile i32, base + 0x54)
+
+    let half = i2c_half_cycle(i2c_clk_hz, freq_hz)
+    let div = i2c_clkm_div(i2c_clk_hz, freq_hz)
+    let mut wait_h = half / 4
+    if freq_hz >= 80000 {
+        wait_h = half / 2 - 2
+    }
+    if wait_h < 0 {
+        wait_h = 0
+    }
+    let high = half - wait_h
+    let hold = half / 4
+    let sample = half / 2
+    let setup = half
+
+    // XTAL source (SCLK_SEL=0), ACTIVE=1, DIV_NUM = clkm_div-1
+    *clk_conf = (1 << 21) | ((div - 1) & 255)
+    *scl_low = (half - 1) & 511
+    *scl_high = (high & 511) | ((wait_h & 127) << 9)
+    *sda_hold = (hold - 1) & 511
+    *sda_sample = (sample - 1) & 511
+    *scl_start_hold = (setup - 1) & 511
+    *scl_rstart_setup = (setup - 1) & 511
+    *scl_stop_hold = (setup - 1) & 511
+    *scl_stop_setup = (setup - 1) & 511
+    *to = (1 << 11) | 16
+    *filter = (1 << 8) | (1 << 9)
+    *fifo_conf = 0
+    // MS_MODE | open-drain (FORCE_OUT=0) | ARBITRATION | CLK_EN | CONF_UPGATE
+    *ctr = (1 << 4) | (1 << 8) | (1 << 9) | (1 << 11)
+
+    return I2c{
+        base: base,
+        ctr: ctr,
+        data: data,
+        int_clr: int_clr,
+        int_raw: int_raw,
+        fifo_conf: fifo_conf
+    }
+}
+
+/// Blocking write `buf` to 7-bit `addr` (STOP after).
+pub fn (bus: I2c) writeto(addr: i32, buf: []u8) {
+    let n = buf.len
+    if n < 1 {
+        return
+    }
+    i2c_fifo_reset(bus)
+    *(bus.int_clr) = 0x3FFF
+    *(bus.data) = ((addr & 127) << 1) & 255
+    let mut i: i32 = 0
+    while i < n {
+        *(bus.data) = u8_as_i32(buf[i])
+        i = i + 1
+    }
+    // RESTART, WRITE(n+1) ack, STOP, END
+    *(i2c_comd(bus, 0)) = i2c_cmd(6, 0, 0, 0, 0)
+    *(i2c_comd(bus, 1)) = i2c_cmd(1, n + 1, 1, 0, 0)
+    *(i2c_comd(bus, 2)) = i2c_cmd(2, 0, 0, 0, 0)
+    *(i2c_comd(bus, 3)) = i2c_cmd(4, 0, 0, 0, 0)
+    *(bus.ctr) = *(bus.ctr) | (1 << 5)
+    i2c_wait_done(bus)
+}
+
+/// Blocking read into `buf` from 7-bit `addr` (len = `buf.len`).
+pub fn (bus: I2c) readfrom_into(addr: i32, buf: []u8) {
+    let n = buf.len
+    if n < 1 {
+        return
+    }
+    i2c_fifo_reset(bus)
+    *(bus.int_clr) = 0x3FFF
+    *(bus.data) = (((addr & 127) << 1) | 1) & 255
+    *(i2c_comd(bus, 0)) = i2c_cmd(6, 0, 0, 0, 0)
+    *(i2c_comd(bus, 1)) = i2c_cmd(1, 1, 1, 0, 0)
+    if n == 1 {
+        *(i2c_comd(bus, 2)) = i2c_cmd(3, 1, 0, 0, 1)
+        *(i2c_comd(bus, 3)) = i2c_cmd(2, 0, 0, 0, 0)
+        *(i2c_comd(bus, 4)) = i2c_cmd(4, 0, 0, 0, 0)
+    } else {
+        *(i2c_comd(bus, 2)) = i2c_cmd(3, n - 1, 0, 0, 0)
+        *(i2c_comd(bus, 3)) = i2c_cmd(3, 1, 0, 0, 1)
+        *(i2c_comd(bus, 4)) = i2c_cmd(2, 0, 0, 0, 0)
+        *(i2c_comd(bus, 5)) = i2c_cmd(4, 0, 0, 0, 0)
+    }
+    *(bus.ctr) = *(bus.ctr) | (1 << 5)
+    i2c_wait_done(bus)
+    let mut i: i32 = 0
+    while i < n {
+        let mut tmp: [4]u8
+        let p = cast(*mut i32, &tmp[0])
+        *p = *(bus.data)
+        buf[i] = tmp[0]
+        i = i + 1
+    }
+}
+
+/// Write one byte then read `buf` (restart) — common register read pattern.
+pub fn (bus: I2c) write_readfrom_into(addr: i32, w: i32, buf: []u8) {
+    let n = buf.len
+    if n < 1 {
+        return
+    }
+    i2c_fifo_reset(bus)
+    *(bus.int_clr) = 0x3FFF
+    *(bus.data) = ((addr & 127) << 1) & 255
+    *(bus.data) = w & 255
+    *(bus.data) = (((addr & 127) << 1) | 1) & 255
+    *(i2c_comd(bus, 0)) = i2c_cmd(6, 0, 0, 0, 0)
+    *(i2c_comd(bus, 1)) = i2c_cmd(1, 2, 1, 0, 0)
+    *(i2c_comd(bus, 2)) = i2c_cmd(6, 0, 0, 0, 0)
+    *(i2c_comd(bus, 3)) = i2c_cmd(1, 1, 1, 0, 0)
+    if n == 1 {
+        *(i2c_comd(bus, 4)) = i2c_cmd(3, 1, 0, 0, 1)
+        *(i2c_comd(bus, 5)) = i2c_cmd(2, 0, 0, 0, 0)
+        *(i2c_comd(bus, 6)) = i2c_cmd(4, 0, 0, 0, 0)
+    } else {
+        *(i2c_comd(bus, 4)) = i2c_cmd(3, n - 1, 0, 0, 0)
+        *(i2c_comd(bus, 5)) = i2c_cmd(3, 1, 0, 0, 1)
+        *(i2c_comd(bus, 6)) = i2c_cmd(2, 0, 0, 0, 0)
+        *(i2c_comd(bus, 7)) = i2c_cmd(4, 0, 0, 0, 0)
+    }
+    *(bus.ctr) = *(bus.ctr) | (1 << 5)
+    i2c_wait_done(bus)
+    let mut i: i32 = 0
+    while i < n {
+        let mut tmp: [4]u8
+        let p = cast(*mut i32, &tmp[0])
+        *p = *(bus.data)
+        buf[i] = tmp[0]
+        i = i + 1
+    }
+}
+
+/// Disable I2C (clear CTR). Does not touch GPIO.
+pub fn (bus: I2c) deinit() {
+    *(bus.ctr) = 0
+}

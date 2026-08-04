@@ -1,0 +1,204 @@
+/// ESP32-C3 GP-SPI2 master (MMIO). Soft CS — app drives chip-select via `Pin`.
+/// No hidden clock — caller passes `spi_clk_hz` (APB) and `baud_hz`.
+module machine_esp
+
+pub struct Spi {
+    cmd: *mut volatile i32
+    user: *mut volatile i32
+    ms_dlen: *mut volatile i32
+    w0: *mut volatile i32
+    dma_int_raw: *mut volatile i32
+    dma_int_clr: *mut volatile i32
+}
+
+fn spi_base(spi: i32): i32 {
+    // C3 GPSPI is SPI2 only
+    let _ = spi
+    return 0x60024000
+}
+
+/// Clock divider N (2..=64) for `freq ≈ spi_clk_hz / N` with PRE=1.
+fn spi_clkcnt_n(spi_clk_hz: i32, baud_hz: i32): i32 {
+    let mut clk = spi_clk_hz
+    if clk < 1 {
+        clk = 1
+    }
+    let mut baud = baud_hz
+    if baud < 1 {
+        baud = 1
+    }
+    let mut n = (clk + baud / 2) / baud
+    if n < 2 {
+        n = 2
+    }
+    if n > 64 {
+        n = 64
+    }
+    return n
+}
+
+/// CLOCK register value: PRE=1, N from `spi_clkcnt_n`, ~50% duty.
+fn spi_clock_reg(spi_clk_hz: i32, baud_hz: i32): i32 {
+    let n = spi_clkcnt_n(spi_clk_hz, baud_hz)
+    let h = n / 2
+    let mut hh = h
+    if hh < 1 {
+        hh = 1
+    }
+    // clkdiv_pre=0 (÷1), clkcnt_n=n-1, clkcnt_h=hh-1, clkcnt_l=n-1
+    return ((n - 1) << 12) | ((hh - 1) << 6) | (n - 1)
+}
+
+fn spi_enable_clock() {
+    let clk_en = cast(*mut volatile i32, 0x600C0010)
+    let rst_en = cast(*mut volatile i32, 0x600C0018)
+    // SPI2 bit 6
+    *clk_en = *clk_en | (1 << 6)
+    *rst_en = *rst_en | (1 << 6)
+    *rst_en = *rst_en & ~(1 << 6)
+}
+
+/// Configure SPI2 master (`spi` must be 2). `mode` is 0..=3 (CPOL/CPHA).
+/// Pins: SCK / MOSI / MISO via GPIO matrix (FSPICLK/FSPID/FSPIQ). Soft CS.
+pub fn spi_out(
+    spi: i32,
+    sck: i32,
+    mosi: i32,
+    miso: i32,
+    spi_clk_hz: i32,
+    baud_hz: i32,
+    mode: i32
+): Spi {
+    let _ = spi
+    spi_enable_clock()
+    // FSPICLK=63, FSPIQ(MISO)=64, FSPID(MOSI)=65
+    matrix_out(sck, 63)
+    matrix_out(mosi, 65)
+    matrix_in(miso, 64)
+
+    let base = spi_base(2)
+    let cmd = cast(*mut volatile i32, base)
+    let ctrl = cast(*mut volatile i32, base + 0x08)
+    let clock = cast(*mut volatile i32, base + 0x0C)
+    let user = cast(*mut volatile i32, base + 0x10)
+    let user1 = cast(*mut volatile i32, base + 0x14)
+    let ms_dlen = cast(*mut volatile i32, base + 0x1C)
+    let misc = cast(*mut volatile i32, base + 0x20)
+    let dma_conf = cast(*mut volatile i32, base + 0x30)
+    let dma_int_clr = cast(*mut volatile i32, base + 0x38)
+    let dma_int_raw = cast(*mut volatile i32, base + 0x3C)
+    let w0 = cast(*mut volatile i32, base + 0x98)
+    let clk_gate = cast(*mut volatile i32, base + 0xE8)
+
+    *clk_gate = (1 << 1) | (1 << 2)
+    *dma_conf = 0
+    *user1 = 0
+    *ctrl = 0
+    // disable CS0..CS5 — soft NSS
+    *misc = 0x3F
+    let mut m = mode
+    if m < 0 {
+        m = 0
+    }
+    if m > 3 {
+        m = 3
+    }
+    // CK_IDLE_EDGE (misc bit 29) / CK_OUT_EDGE (user bit 9)
+    if m == 0 {
+        *misc = *misc & ~(1 << 29)
+        *user = 0
+    } else {
+        if m == 1 {
+            *misc = *misc & ~(1 << 29)
+            *user = 1 << 9
+        } else {
+            if m == 2 {
+                *misc = *misc | (1 << 29)
+                *user = 1 << 9
+            } else {
+                *misc = *misc | (1 << 29)
+                *user = 0
+            }
+        }
+    }
+    // DOUTDIN | USR_MOSI | USR_MISO (full duplex, no cmd/addr)
+    *user = *user | 1 | (1 << 27) | (1 << 28)
+    *clock = spi_clock_reg(spi_clk_hz, baud_hz)
+    // apply config
+    *cmd = 1 << 23
+    while (*cmd & (1 << 23)) != 0 {
+    }
+
+    return Spi{
+        cmd: cmd,
+        user: user,
+        ms_dlen: ms_dlen,
+        w0: w0,
+        dma_int_raw: dma_int_raw,
+        dma_int_clr: dma_int_clr
+    }
+}
+
+fn spi_xfer_u8(s: Spi, b: i32): i32 {
+    *(s.ms_dlen) = 7
+    *(s.w0) = b & 255
+    // clear TRANS_DONE
+    *(s.dma_int_clr) = 1 << 12
+    // USR
+    *(s.cmd) = 1 << 24
+    while (*(s.dma_int_raw) & (1 << 12)) == 0 {
+    }
+    *(s.dma_int_clr) = 1 << 12
+    return *(s.w0) & 255
+}
+
+/// Full-duplex transfer one byte. Returns the received byte (0..=255).
+pub fn (s: Spi) write_read_u8(b: i32): i32 {
+    return spi_xfer_u8(s, b)
+}
+
+/// Write every byte in `buf` (discards RX bytes).
+pub fn (s: Spi) write(buf: []u8) {
+    let mut i: i32 = 0
+    while i < buf.len {
+        let drain = spi_xfer_u8(s, u8_as_i32(buf[i]))
+        i = i + 1 + drain * 0
+    }
+}
+
+/// Fill `buf` by clocking out 0xFF (readinto).
+pub fn (s: Spi) readinto(buf: []u8) {
+    let mut i: i32 = 0
+    while i < buf.len {
+        let v = spi_xfer_u8(s, 255)
+        let mut tmp: [4]u8
+        let p = cast(*mut i32, &tmp[0])
+        *p = v
+        buf[i] = tmp[0]
+        i = i + 1
+    }
+}
+
+/// Write `wbuf` and capture into `rbuf` (same length; uses `rbuf.len`).
+pub fn (s: Spi) write_readinto(wbuf: []u8, rbuf: []u8) {
+    let mut n = rbuf.len
+    if wbuf.len < n {
+        n = wbuf.len
+    }
+    let mut i: i32 = 0
+    while i < n {
+        let v = spi_xfer_u8(s, u8_as_i32(wbuf[i]))
+        let mut tmp: [4]u8
+        let p = cast(*mut i32, &tmp[0])
+        *p = v
+        rbuf[i] = tmp[0]
+        i = i + 1
+    }
+}
+
+/// Disable SPI clock gate (does not touch GPIO).
+pub fn (s: Spi) deinit() {
+    // clear USR / leave clock gate off via cmd=0
+    *(s.cmd) = 0
+    *(s.user) = 0
+}
