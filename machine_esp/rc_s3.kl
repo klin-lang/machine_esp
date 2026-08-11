@@ -1,0 +1,16 @@
+/// RC / hobby-servo on ESP32-S3 LEDC. Twin of `rc_out` — call `rc_out_s3`.
+module machine_esp
+
+/// Same HW args as `pwm_out_s3`, plus RC frame rate and pulse range (µs).
+pub fn rc_out_s3(
+    num: i32,
+    ch: i32,
+    tim: i32,
+    ledc_clk_hz: i32,
+    freq_hz: i32,
+    us_min: i32,
+    us_max: i32
+): Rc {
+    let pwm = pwm_out_s3(num, ch, tim, ledc_clk_hz)
+    return rc_from_pwm(pwm, freq_hz, us_min, us_max)
+}

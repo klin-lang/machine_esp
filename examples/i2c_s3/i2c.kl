@@ -1,0 +1,23 @@
+// ESP32-S3 I2C0: SDA=GPIO8 / SCL=GPIO9, XTAL 40 MHz, 100 kHz.
+// Configures the bus then blinks GPIO2 via pin_out_s3.
+import "../../machine_esp" machine
+
+@[cexport, codename("klin_app_main")]
+fn i2c_main() {
+    let bus = machine.i2c_out_s3(0, 8, 9, 40000000, 100000)
+    let led = machine.pin_out_s3(2)
+    while true {
+        led.toggle()
+        let mut i: i32 = 0
+        while i < 2000000 {
+            i = i + 1
+        }
+        if false {
+            bus.deinit()
+        }
+    }
+}
+
+fn main() {
+    i2c_main()
+}

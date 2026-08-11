@@ -1,0 +1,77 @@
+/// ESP32-S3 I2C0 (MMIO). Twin of `i2c_out` — call `i2c_out_s3`.
+/// Signal IDs: I2CEXT0_SCL=89, SDA=90. SYSTEM clocks @ +0x18 / +0x20.
+module machine_esp
+
+fn i2c_enable_clock_s3() {
+    let clk_en = cast(*mut volatile i32, 0x600C0018)
+    let rst_en = cast(*mut volatile i32, 0x600C0020)
+    // I2C_EXT0 bit 7
+    *clk_en = *clk_en | (1 << 7)
+    *rst_en = *rst_en | (1 << 7)
+    *rst_en = *rst_en & ~(1 << 7)
+}
+
+/// Configure I2C0 (`i2c` ignored / must be 0) on SDA/SCL GPIOs. 7-bit addresses.
+/// Open-drain + pull-up via IO_MUX. Typical: SDA=8 / SCL=9, XTAL 40 MHz.
+pub fn i2c_out_s3(i2c: i32, sda: i32, scl: i32, i2c_clk_hz: i32, freq_hz: i32): I2c {
+    let _ = i2c
+    i2c_enable_clock_s3()
+    // I2CEXT0_SCL=89, SDA=90
+    matrix_od_pu_s3(scl, 89)
+    matrix_od_pu_s3(sda, 90)
+
+    let base = i2c_base(0)
+    let scl_low = cast(*mut volatile i32, base)
+    let ctr = cast(*mut volatile i32, base + 0x04)
+    let to = cast(*mut volatile i32, base + 0x0C)
+    let fifo_conf = cast(*mut volatile i32, base + 0x18)
+    let data = cast(*mut volatile i32, base + 0x1C)
+    let int_raw = cast(*mut volatile i32, base + 0x20)
+    let int_clr = cast(*mut volatile i32, base + 0x24)
+    let sda_hold = cast(*mut volatile i32, base + 0x30)
+    let sda_sample = cast(*mut volatile i32, base + 0x34)
+    let scl_high = cast(*mut volatile i32, base + 0x38)
+    let scl_start_hold = cast(*mut volatile i32, base + 0x40)
+    let scl_rstart_setup = cast(*mut volatile i32, base + 0x44)
+    let scl_stop_hold = cast(*mut volatile i32, base + 0x48)
+    let scl_stop_setup = cast(*mut volatile i32, base + 0x4C)
+    let filter = cast(*mut volatile i32, base + 0x50)
+    let clk_conf = cast(*mut volatile i32, base + 0x54)
+
+    let half = i2c_half_cycle(i2c_clk_hz, freq_hz)
+    let div = i2c_clkm_div(i2c_clk_hz, freq_hz)
+    let mut wait_h = half / 4
+    if freq_hz >= 80000 {
+        wait_h = half / 2 - 2
+    }
+    if wait_h < 0 {
+        wait_h = 0
+    }
+    let high = half - wait_h
+    let hold = half / 4
+    let sample = half / 2
+    let setup = half
+
+    *clk_conf = (1 << 21) | ((div - 1) & 255)
+    *scl_low = (half - 1) & 511
+    *scl_high = (high & 511) | ((wait_h & 127) << 9)
+    *sda_hold = (hold - 1) & 511
+    *sda_sample = (sample - 1) & 511
+    *scl_start_hold = (setup - 1) & 511
+    *scl_rstart_setup = (setup - 1) & 511
+    *scl_stop_hold = (setup - 1) & 511
+    *scl_stop_setup = (setup - 1) & 511
+    *to = (1 << 11) | 16
+    *filter = (1 << 8) | (1 << 9)
+    *fifo_conf = 0
+    *ctr = (1 << 4) | (1 << 8) | (1 << 9) | (1 << 11)
+
+    return I2c{
+        base: base,
+        ctr: ctr,
+        data: data,
+        int_clr: int_clr,
+        int_raw: int_raw,
+        fifo_conf: fifo_conf
+    }
+}

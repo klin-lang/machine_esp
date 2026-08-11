@@ -1,0 +1,10 @@
+module machine_esp
+
+import testing
+
+fn test_adc_s3_gpio_for_channel() {
+    testing.assert_eq_i32(adc_s3_gpio_for_channel(0), 1)
+    testing.assert_eq_i32(adc_s3_gpio_for_channel(9), 10)
+    testing.assert_eq_i32(adc_s3_gpio_for_channel(0 - 1), 0 - 1)
+    testing.assert_eq_i32(adc_s3_gpio_for_channel(10), 0 - 1)
+}

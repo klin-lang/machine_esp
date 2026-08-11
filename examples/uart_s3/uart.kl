@@ -1,0 +1,30 @@
+// ESP32-S3 UART0: TX=GPIO17 / RX=GPIO18, APB 80 MHz, 115200 8N1.
+// Boot/flash via ESP-IDF (see Makefile / README).
+import "../../machine_esp" machine
+
+@[cexport, codename("klin_app_main")]
+fn uart_main() {
+    let u = machine.uart_out_s3(0, 17, 18, 80000000, 115200)
+    let mut msg: [6]u8
+    msg[0] = 104
+    msg[1] = 101
+    msg[2] = 108
+    msg[3] = 108
+    msg[4] = 111
+    msg[5] = 10
+    while true {
+        u.write(msg)
+        if u.any() {
+            let b = u.read_u8()
+            u.write_u8(b)
+        }
+        let mut i: i32 = 0
+        while i < 2000000 {
+            i = i + 1
+        }
+    }
+}
+
+fn main() {
+    uart_main()
+}

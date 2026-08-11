@@ -1,0 +1,15 @@
+module machine_esp
+
+import testing
+
+fn test_uart_base_s3_map() {
+    testing.assert_eq_i32(uart_base_s3(0), 0x60000000)
+    testing.assert_eq_i32(uart_base_s3(1), 0x60010000)
+    testing.assert_eq_i32(uart_base_s3(2), 0x6002E000)
+}
+
+fn test_uart_sig_s3_map() {
+    testing.assert_eq_i32(uart_sig_s3(0), 12)
+    testing.assert_eq_i32(uart_sig_s3(1), 15)
+    testing.assert_eq_i32(uart_sig_s3(2), 18)
+}
