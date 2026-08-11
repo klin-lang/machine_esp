@@ -1,0 +1,22 @@
+// ESP32-S3 GPIO blink via machine_esp.pin_out_s3.
+// Default GPIO2 (safe general-purpose on many S3 boards).
+// Waveshare ESP32-S3-Pico: change to 35 for silkscreen D10; GPIO21 is WS2812.
+import "../../machine_esp" machine
+
+@[cexport, codename("klin_app_main")]
+fn blink_main() {
+    let led = machine.pin_out_s3(2)
+    while true {
+        led.toggle()
+        // Busy-wait (CPU freq depends on IDF sdkconfig; tune on hardware).
+        let mut i: i32 = 0
+        while i < 2000000 {
+            i = i + 1
+        }
+    }
+}
+
+// Required by Klin checker; stripped to static when linking under ESP-IDF.
+fn main() {
+    blink_main()
+}

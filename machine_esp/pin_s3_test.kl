@@ -1,0 +1,32 @@
+module machine_esp
+
+import testing
+
+fn test_pin_s3_ok_range() {
+    testing.assert_eq_i32(pin_s3_ok(0), 1)
+    testing.assert_eq_i32(pin_s3_ok(21), 1)
+    testing.assert_eq_i32(pin_s3_ok(22), 0)
+    testing.assert_eq_i32(pin_s3_ok(25), 0)
+    testing.assert_eq_i32(pin_s3_ok(26), 1)
+    testing.assert_eq_i32(pin_s3_ok(35), 1)
+    testing.assert_eq_i32(pin_s3_ok(48), 1)
+    testing.assert_eq_i32(pin_s3_ok(49), 0)
+    testing.assert_eq_i32(pin_s3_ok(0 - 1), 0)
+}
+
+fn test_pin_s3_mask_banks() {
+    testing.assert_eq_i32(pin_s3_mask(0), 1)
+    testing.assert_eq_i32(pin_s3_mask(2), 4)
+    testing.assert_eq_i32(pin_s3_mask(30), 1073741824)
+    testing.assert_eq_i32(pin_s3_mask(32), 1)
+    testing.assert_eq_i32(pin_s3_mask(35), 8)
+}
+
+fn test_pin_s3_bank_addrs() {
+    testing.assert_eq_i32(pin_s3_out_reg(2), 0x60004004)
+    testing.assert_eq_i32(pin_s3_out_reg(35), 0x60004010)
+    testing.assert_eq_i32(pin_s3_en_set_reg(2), 0x60004024)
+    testing.assert_eq_i32(pin_s3_en_set_reg(35), 0x60004030)
+    testing.assert_eq_i32(pin_s3_in_reg(2), 0x6000403C)
+    testing.assert_eq_i32(pin_s3_in_reg(35), 0x60004040)
+}

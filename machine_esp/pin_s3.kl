@@ -1,0 +1,250 @@
+// ESP32-S3 GPIO Pin (MMIO). Twin of C3 `pin_out` / `pin_in` — call `*_s3`.
+// Addresses: GPIO 0x60004000, IO_MUX 0x60009000 (ESP32-S3 TRM / IDF soc).
+// Pads: GPIO 0..21 and 26..48 (22..25 have no pad). Matrix: SIG_GPIO_OUT=256,
+// OEN_SEL bit 10, IN_SEL bit 7 / 6-bit gpio. Bank1 OUT1/ENABLE1/IN1 for ≥32.
+module machine_esp
+
+/// 1 when `num` is a valid S3 pad GPIO; else 0 (host-testable).
+fn pin_s3_ok(num: i32): i32 {
+    if num < 0 {
+        return 0
+    }
+    if num > 48 {
+        return 0
+    }
+    if num >= 22 {
+        if num <= 25 {
+            return 0
+        }
+    }
+    return 1
+}
+
+/// Bit mask within the selected OUT/ENABLE bank (bit 0..=31 or 0..=16).
+fn pin_s3_mask(num: i32): i32 {
+    if num < 32 {
+        return 1 << num
+    }
+    return 1 << (num - 32)
+}
+
+fn pin_s3_out_reg(num: i32): i32 {
+    if num < 32 {
+        return 0x60004004
+    }
+    return 0x60004010
+}
+
+fn pin_s3_out_set_reg(num: i32): i32 {
+    if num < 32 {
+        return 0x60004008
+    }
+    return 0x60004014
+}
+
+fn pin_s3_out_clr_reg(num: i32): i32 {
+    if num < 32 {
+        return 0x6000400C
+    }
+    return 0x60004018
+}
+
+fn pin_s3_en_set_reg(num: i32): i32 {
+    if num < 32 {
+        return 0x60004024
+    }
+    return 0x60004030
+}
+
+fn pin_s3_en_clr_reg(num: i32): i32 {
+    if num < 32 {
+        return 0x60004028
+    }
+    return 0x60004034
+}
+
+fn pin_s3_in_reg(num: i32): i32 {
+    if num < 32 {
+        return 0x6000403C
+    }
+    return 0x60004040
+}
+
+fn gpio_clock_enable_s3() {
+    // GPIO_CLOCK_GATE_REG — clk_en bit 0 (same offset as C3)
+    let gate = cast(*mut volatile i32, 0x6000462C)
+    *gate = *gate | 1
+}
+
+fn io_mux_reg_s3(num: i32): *mut volatile i32 {
+    // IO_MUX_GPIOn_REG at 0x60009004 + 4*n (gap pads 22..25 unused)
+    return cast(*mut volatile i32, 0x60009004 + num * 4)
+}
+
+fn func_out_sel_cfg_s3(num: i32): *mut volatile i32 {
+    // GPIO_FUNCn_OUT_SEL_CFG_REG at 0x60004554 + 4*n
+    return cast(*mut volatile i32, 0x60004554 + num * 4)
+}
+
+fn func_in_sel_cfg_s3(sig: i32): *mut volatile i32 {
+    // GPIO_FUNCn_IN_SEL_CFG_REG at 0x60004154 + 4*sig
+    return cast(*mut volatile i32, 0x60004154 + sig * 4)
+}
+
+/// Route peripheral output `sig` onto GPIO `num` (OE from peripheral).
+fn matrix_out_s3(num: i32, sig: i32) {
+    if pin_s3_ok(num) == 0 {
+        return
+    }
+    gpio_clock_enable_s3()
+    let mux = io_mux_reg_s3(num)
+    let mut v = *mux
+    v = v & ~(7 << 12)
+    v = v | (1 << 12)
+    v = v & ~(3 << 10)
+    v = v | (2 << 10)
+    v = v & ~(1 << 9)
+    v = v & ~(1 << 8)
+    v = v & ~(1 << 7)
+    *mux = v
+    let cfg = func_out_sel_cfg_s3(num)
+    *cfg = sig
+    let en_set = cast(*mut volatile i32, pin_s3_en_set_reg(num))
+    *en_set = pin_s3_mask(num)
+}
+
+/// Route GPIO `num` into peripheral input `sig` (FUN_IE on).
+fn matrix_in_s3(num: i32, sig: i32) {
+    if pin_s3_ok(num) == 0 {
+        return
+    }
+    gpio_clock_enable_s3()
+    let mux = io_mux_reg_s3(num)
+    let mut v = *mux
+    v = v & ~(7 << 12)
+    v = v | (1 << 12)
+    v = v & ~(3 << 10)
+    v = v | (2 << 10)
+    v = v | (1 << 9)
+    v = v & ~(1 << 8)
+    v = v & ~(1 << 7)
+    *mux = v
+    // SIG_IN_SEL (bit 7) | 6-bit gpio
+    let cfg = func_in_sel_cfg_s3(sig)
+    *cfg = (1 << 7) | (num & 63)
+    let en_clr = cast(*mut volatile i32, pin_s3_en_clr_reg(num))
+    *en_clr = pin_s3_mask(num)
+}
+
+/// Bidirectional open-drain pad (I2C): matrix out+in, pull-up, OE from peri.
+fn matrix_od_pu_s3(num: i32, sig: i32) {
+    if pin_s3_ok(num) == 0 {
+        return
+    }
+    gpio_clock_enable_s3()
+    let mux = io_mux_reg_s3(num)
+    let mut v = *mux
+    v = v & ~(7 << 12)
+    v = v | (1 << 12)
+    v = v & ~(3 << 10)
+    v = v | (2 << 10)
+    v = v | (1 << 9)
+    v = v | (1 << 8)
+    v = v & ~(1 << 7)
+    *mux = v
+    let out = func_out_sel_cfg_s3(num)
+    *out = sig
+    let inp = func_in_sel_cfg_s3(sig)
+    *inp = (1 << 7) | (num & 63)
+    let en_set = cast(*mut volatile i32, pin_s3_en_set_reg(num))
+    *en_set = pin_s3_mask(num)
+}
+
+fn configure_pad_gpio_s3(num: i32, input: i32) {
+    gpio_clock_enable_s3()
+
+    // MCU_SEL = 1 (GPIO), FUN_DRV = 2; FUN_IE when input != 0
+    let mux = io_mux_reg_s3(num)
+    let mut v = *mux
+    v = v & ~(7 << 12)
+    v = v | (1 << 12)
+    v = v & ~(3 << 10)
+    v = v | (2 << 10)
+    if input != 0 {
+        v = v | (1 << 9)
+    } else {
+        v = v & ~(1 << 9)
+    }
+    v = v & ~(1 << 8)
+    v = v & ~(1 << 7)
+    *mux = v
+
+    // Simple GPIO: OUT_SEL = SIG_GPIO_OUT (256), OEN_SEL = 1 (bit 10)
+    let cfg = func_out_sel_cfg_s3(num)
+    *cfg = 256 | (1 << 10)
+}
+
+fn pin_s3_inert(): Pin {
+    // Invalid GPIO: no MMIO writes; mask 0 → high/low/toggle are no-ops.
+    let out = cast(*mut volatile i32, 0x60004004)
+    let out_set = cast(*mut volatile i32, 0x60004008)
+    let out_clr = cast(*mut volatile i32, 0x6000400C)
+    let gpio_in = cast(*mut volatile i32, 0x6000403C)
+    return Pin{
+        out: out,
+        out_set: out_set,
+        out_clr: out_clr,
+        gpio_in: gpio_in,
+        mask: 0
+    }
+}
+
+/// Configure GPIO `num` as push-pull output on ESP32-S3 (0..21, 26..48).
+/// Out of range → inert Pin (mask 0); no MMIO.
+pub fn pin_out_s3(num: i32): Pin {
+    if pin_s3_ok(num) == 0 {
+        return pin_s3_inert()
+    }
+    configure_pad_gpio_s3(num, 0)
+
+    let mask = pin_s3_mask(num)
+    let en_set = cast(*mut volatile i32, pin_s3_en_set_reg(num))
+    *en_set = mask
+
+    let out = cast(*mut volatile i32, pin_s3_out_reg(num))
+    let out_set = cast(*mut volatile i32, pin_s3_out_set_reg(num))
+    let out_clr = cast(*mut volatile i32, pin_s3_out_clr_reg(num))
+    let gpio_in = cast(*mut volatile i32, pin_s3_in_reg(num))
+    return Pin{
+        out: out,
+        out_set: out_set,
+        out_clr: out_clr,
+        gpio_in: gpio_in,
+        mask: mask
+    }
+}
+
+/// Configure GPIO `num` as floating input on ESP32-S3.
+/// Out of range → inert Pin (mask 0); no MMIO.
+pub fn pin_in_s3(num: i32): Pin {
+    if pin_s3_ok(num) == 0 {
+        return pin_s3_inert()
+    }
+    configure_pad_gpio_s3(num, 1)
+
+    let mask = pin_s3_mask(num)
+    let en_clr = cast(*mut volatile i32, pin_s3_en_clr_reg(num))
+    *en_clr = mask
+
+    let out = cast(*mut volatile i32, pin_s3_out_reg(num))
+    let out_set = cast(*mut volatile i32, pin_s3_out_set_reg(num))
+    let out_clr = cast(*mut volatile i32, pin_s3_out_clr_reg(num))
+    let gpio_in = cast(*mut volatile i32, pin_s3_in_reg(num))
+    return Pin{
+        out: out,
+        out_set: out_set,
+        out_clr: out_clr,
+        gpio_in: gpio_in,
+        mask: mask
+    }
+}
