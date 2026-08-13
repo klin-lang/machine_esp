@@ -1,0 +1,135 @@
+/// ESP32-S3 RMT TX (MMIO). Channels 0..=3 only (TX-capable).
+/// Base 0x60016000, channel RAM at RMTMEM 0x60016800 (48 words/ch).
+/// Signal: RMT_SIG_OUT0 = 81 (+ ch). Clock: APB via SYS_CONF (explicit Hz).
+/// No DMA, no carrier, no hidden heap. Call `rmt_tx_s3`.
+module machine_esp
+
+/// One TX channel: conf / status / interrupt regs + channel RAM base.
+pub struct Rmt {
+    conf0: *mut volatile i32
+    status: *mut volatile i32
+    int_raw: *mut volatile i32
+    int_clr: *mut volatile i32
+    mem_base: i32
+    ch: i32
+    /// Channel tick Hz after group + channel dividers (for encoding).
+    tick_hz: i32
+}
+
+fn system_rmt_enable_s3() {
+    // SYSTEM_PERIP_CLK_EN0 / RST_EN0 — RMT bit 9 (@ +0x18 / +0x20 on S3)
+    let clk_en = cast(*mut volatile i32, 0x600C0018)
+    *clk_en = *clk_en | (1 << 9)
+    let rst_en = cast(*mut volatile i32, 0x600C0020)
+    *rst_en = *rst_en | (1 << 9)
+    *rst_en = *rst_en & ~(1 << 9)
+}
+
+/// Pack one RMT symbol word (duration0/level0/duration1/level1). Host-testable.
+pub fn rmt_symbol(d0: i32, l0: i32, d1: i32, l1: i32): i32 {
+    let a = d0 & 32767
+    let b = (l0 & 1) << 15
+    let c = (d1 & 32767) << 16
+    let d = (l1 & 1) << 31
+    return a | b | c | d
+}
+
+/// Channel RAM base for TX `ch` (0..=3). Host-testable.
+fn rmt_mem_base_s3(ch: i32): i32 {
+    // RMTMEM + ch * 48 * 4
+    return 0x60016800 + ch * 192
+}
+
+/// GPIO matrix signal for RMT TX `ch` (RMT_SIG_OUT0 = 81). Host-testable.
+fn rmt_sig_out_s3(ch: i32): i32 {
+    return 81 + ch
+}
+
+/// Tick Hz = `apb_hz` / `ch_div` when group clock is APB with integral div 1.
+pub fn rmt_tick_hz_s3(apb_hz: i32, ch_div: i32): i32 {
+    let mut d = ch_div
+    if d < 1 {
+        d = 1
+    }
+    if d > 256 {
+        d = 256
+    }
+    return apb_hz / d
+}
+
+fn rmt_sys_conf_apb_s3() {
+    // Direct mem access, mem clock on, power up, APB src, div=1, sclk active, clk_en
+    // sclk_div_num field stores (integral - 1) → 0 means ÷1
+    // sclk_sel=1 APB; sclk_active bit26; clk_en bit31; apb_fifo_mask bit0; mem_clk_force_on bit1;
+    // mem_force_pu bit3
+    let sys = cast(*mut volatile i32, 0x600160C0)
+    *sys = 1 | (1 << 1) | (1 << 3) | (1 << 24) | (1 << 26) | (1 << 31)
+}
+
+/// Configure GPIO `num` as RMT TX on channel `ch` (0..=3).
+/// `apb_hz` is the RMT group source (APB, typically 80_000_000 under IDF).
+/// Channel divider is fixed at 8 → tick = apb_hz/8 (10 MHz @ 80 MHz).
+pub fn rmt_tx_s3(num: i32, ch: i32, apb_hz: i32): Rmt {
+    let mut c = ch
+    if c < 0 {
+        c = 0
+    }
+    if c > 3 {
+        c = 3
+    }
+    system_rmt_enable_s3()
+    rmt_sys_conf_apb_s3()
+    matrix_out_s3(num, rmt_sig_out_s3(c))
+
+    let conf0 = cast(*mut volatile i32, 0x60016020 + c * 4)
+    let status = cast(*mut volatile i32, 0x60016050 + c * 4)
+    let int_raw = cast(*mut volatile i32, 0x60016070)
+    let int_clr = cast(*mut volatile i32, 0x6001607C)
+    let ch_div: i32 = 8
+
+    // idle low + enable; div_cnt=8; mem_size=1 block; carrier off (bit21 default is 1)
+    // bits: idle_out_lv=0, idle_out_en=1 (6), div 8<<8, mem_size 1<<16
+    *conf0 = (1 << 6) | (ch_div << 8) | (1 << 16)
+
+    // reset mem pointers (WT bits 1 and 2)
+    *conf0 = *conf0 | (1 << 1) | (1 << 2)
+    *conf0 = (*conf0) & ~((1 << 1) | (1 << 2))
+
+    return Rmt{
+        conf0: conf0,
+        status: status,
+        int_raw: int_raw,
+        int_clr: int_clr,
+        mem_base: rmt_mem_base_s3(c),
+        ch: c,
+        tick_hz: rmt_tick_hz_s3(apb_hz, ch_div)
+    }
+}
+
+/// Write one symbol at channel RAM `index` (0..=47).
+pub fn (r: Rmt) put(index: i32, symbol: i32) {
+    let mut i = index
+    if i < 0 {
+        i = 0
+    }
+    if i > 47 {
+        i = 47
+    }
+    let p = cast(*mut volatile i32, r.mem_base + i * 4)
+    *p = symbol
+}
+
+/// Start TX (conf_update then tx_start). Clear TX_END raw first.
+pub fn (r: Rmt) start() {
+    *(r.int_clr) = 1 << r.ch
+    // conf_update bit24, tx_start bit0 (both WT)
+    *(r.conf0) = *(r.conf0) | (1 << 24) | 1
+}
+
+/// Busy-wait until CH_TX_END for this channel.
+pub fn (r: Rmt) wait_done() {
+    let bit = 1 << r.ch
+    while (*(r.int_raw) & bit) == 0 {
+    }
+    *(r.int_clr) = bit
+}
