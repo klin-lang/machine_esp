@@ -1,0 +1,66 @@
+/// ESP32-S3 LEDC PWM (MMIO). Twin of `pwm_out` — call `pwm_out_s3`.
+/// SYSTEM_PERIP_CLK_EN0 @ +0x18 / RST @ +0x20 (not C3 +0x10/+0x18).
+/// LEDC_LS_SIG_OUT base = 73; channels 0..=7.
+module machine_esp
+
+fn system_ledc_enable_s3() {
+    // SYSTEM_PERIP_CLK_EN0 / RST_EN0 — LEDC bit 11
+    let clk_en = cast(*mut volatile i32, 0x600C0018)
+    *clk_en = *clk_en | (1 << 11)
+    let rst_en = cast(*mut volatile i32, 0x600C0020)
+    *rst_en = *rst_en & ~(1 << 11)
+}
+
+fn ledc_select_apb_s3() {
+    // LEDC_CONF_REG: APB_CLK_SEL=1, CLK_EN=1
+    let conf = cast(*mut volatile i32, 0x600190D0)
+    *conf = 1 | (1 << 31)
+}
+
+fn configure_pad_ledc_s3(num: i32, ch: i32) {
+    // GPIO matrix: OUT_SEL = LEDC_LS_SIG_OUTn (73+ch), OEN from peripheral
+    matrix_out_s3(num, 73 + ch)
+}
+
+/// Configure GPIO `num` as LEDC PWM on channel `ch` (0..=7), timer `tim`
+/// (0..=3). `ledc_clk_hz` is the LEDC source clock (APB when using default
+/// APB_CLK_SEL — explicit, no clock-tree read).
+pub fn pwm_out_s3(num: i32, ch: i32, tim: i32, ledc_clk_hz: i32): Pwm {
+    system_ledc_enable_s3()
+    ledc_select_apb_s3()
+    let mut c = ch
+    if c < 0 {
+        c = 0
+    }
+    if c > 7 {
+        c = 7
+    }
+    configure_pad_ledc_s3(num, c)
+
+    let ch_base = 0x60019000 + c * 0x14
+    let conf0 = cast(*mut volatile i32, ch_base)
+    let hpoint = cast(*mut volatile i32, ch_base + 0x04)
+    let duty = cast(*mut volatile i32, ch_base + 0x08)
+    let conf1 = cast(*mut volatile i32, ch_base + 0x0C)
+    let timer_conf = cast(*mut volatile i32, 0x600190A0 + tim * 0x08)
+
+    let duty_res: i32 = 13
+
+    *hpoint = 0
+    *duty = 0
+    *conf0 = (tim & 3) | (1 << 2)
+
+    let pwm = Pwm{
+        conf0: conf0,
+        duty: duty,
+        conf1: conf1,
+        timer_conf: timer_conf,
+        duty_res: duty_res,
+        ledc_clk_hz: ledc_clk_hz
+    }
+    pwm.freq(1000)
+    pwm.duty_u16(0)
+    *conf0 = *(pwm.conf0) | (1 << 4)
+    *conf1 = 1 << 31
+    return pwm
+}

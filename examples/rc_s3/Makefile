@@ -1,0 +1,37 @@
+# ESP32-S3 RC/servo sweep: Klin --emit-c → ESP-IDF build/flash.
+#
+#   make emit KLIN=/path/to/klin/bin/klin.dart
+#   make build
+#   make flash
+
+KLIN ?= klin
+IDF_PY ?= idf.py
+
+.PHONY: all emit build flash monitor clean
+
+all: build
+
+emit: out/rc.c
+
+out/rc.c out/rc.link: rc.kl $(wildcard ../../machine_esp/*.kl)
+	@mkdir -p out
+	@case "$(KLIN)" in \
+	  *.dart) dart run "$(KLIN)" --emit-c rc.kl ;; \
+	  *) "$(KLIN)" --emit-c rc.kl ;; \
+	esac
+	@sed -i 's/^int main(void)/static int klin_unused_main(void)/' out/rc.c
+
+build: emit
+	@test -n "$$IDF_PATH" || (echo "IDF_PATH not set — source ESP-IDF export.sh" >&2; exit 1)
+	$(IDF_PY) set-target esp32s3
+	$(IDF_PY) build
+
+flash: build
+	$(IDF_PY) flash
+
+monitor:
+	$(IDF_PY) monitor
+
+clean:
+	rm -rf out build
+	-$(IDF_PY) fullclean 2>/dev/null || true

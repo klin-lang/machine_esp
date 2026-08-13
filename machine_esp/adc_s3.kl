@@ -1,0 +1,83 @@
+/// ESP32-S3 ADC1 oneshot (MMIO via APB_SARADC). Twin of `adc_out` — `adc_out_s3`.
+/// Channel → GPIO (ADC1 only; pass both explicitly):
+///   CH0→GPIO1, CH1→GPIO2, CH2→GPIO3, CH3→GPIO4, CH4→GPIO5,
+///   CH5→GPIO6, CH6→GPIO7, CH7→GPIO8, CH8→GPIO9, CH9→GPIO10.
+/// SYSTEM clocks @ +0x18 / +0x20. SIG_GPIO_OUT / OEN use S3 encoding.
+module machine_esp
+
+/// Expected GPIO for ADC1 `channel` (0..=9). Out of range → −1.
+fn adc_s3_gpio_for_channel(channel: i32): i32 {
+    if channel < 0 {
+        return 0 - 1
+    }
+    if channel > 9 {
+        return 0 - 1
+    }
+    return channel + 1
+}
+
+fn adc_enable_clock_s3() {
+    let clk_en = cast(*mut volatile i32, 0x600C0018)
+    let rst_en = cast(*mut volatile i32, 0x600C0020)
+    // APB_SARADC bit 28
+    *clk_en = *clk_en | (1 << 28)
+    *rst_en = *rst_en | (1 << 28)
+    *rst_en = *rst_en & ~(1 << 28)
+}
+
+fn adc_pad_analog_s3(num: i32) {
+    if pin_s3_ok(num) == 0 {
+        return
+    }
+    gpio_clock_enable_s3()
+    let mux = io_mux_reg_s3(num)
+    let mut v = *mux
+    v = v & ~(7 << 12)
+    v = v | (1 << 12)
+    v = v & ~(1 << 9)
+    v = v & ~(1 << 8)
+    v = v & ~(1 << 7)
+    *mux = v
+    let cfg = func_out_sel_cfg_s3(num)
+    *cfg = 256 | (1 << 10)
+    let en_clr = cast(*mut volatile i32, pin_s3_en_clr_reg(num))
+    *en_clr = pin_s3_mask(num)
+}
+
+/// Configure ADC1 on GPIO `num` for `channel` (0..=9).
+/// Attenuation defaults to 0 dB. Channel clamped to 0..=9.
+pub fn adc_out_s3(num: i32, channel: i32): Adc {
+    adc_enable_clock_s3()
+    let mut ch = channel
+    if ch < 0 {
+        ch = 0
+    }
+    if ch > 9 {
+        ch = 9
+    }
+    adc_pad_analog_s3(num)
+
+    let base = 0x60040000
+    let ctrl = cast(*mut volatile i32, base)
+    let onetime = cast(*mut volatile i32, base + 0x20)
+    let data = cast(*mut volatile i32, base + 0x2C)
+    let int_raw = cast(*mut volatile i32, base + 0x44)
+    let int_clr = cast(*mut volatile i32, base + 0x4C)
+    let clkm = cast(*mut volatile i32, base + 0x54)
+
+    *ctrl = (1 << 6) | (3 << 27) | (1 << 7)
+    *clkm = (1 << 20) | (2 << 21) | 15
+    let mut i: i32 = 0
+    while i < 100 {
+        i = i + 1
+    }
+
+    return Adc{
+        ctrl: ctrl,
+        onetime: onetime,
+        data: data,
+        int_raw: int_raw,
+        int_clr: int_clr,
+        channel: ch
+    }
+}

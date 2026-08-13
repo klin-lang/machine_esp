@@ -3,157 +3,109 @@
 ESP32 port of a MicroPython-shaped **`machine`** API for [Klin](https://github.com/klin-lang/klin).
 
 Not a MicroPython port. No GC, no hidden heap. **`Pin` / `Pwm` / `Rc` / `Uart` /
-`I2c` / `Spi` / `Adc` use explicit MMIO** (ESP32-C3 GPIO + IO_MUX + LEDC +
-UART/I2C/SPI2/ADC1). Boot and flash use **minimal ESP-IDF** in the examples only
-— IDF is not part of the Klin package API.
+`I2c` / `Spi` / `Adc` use explicit MMIO** (ESP32-C3 / ESP32-S3 GPIO + IO_MUX +
+LEDC + UART/I2C/SPI2/ADC1). Boot and flash use **minimal ESP-IDF** in the
+examples only — IDF is not part of the Klin package API.
 
-**No hardware DAC** on ESP32-C3 — there is no `Dac` API in this package.
+**No hardware DAC** on ESP32-C3 / ESP32-S3 in this package (S3 has DAC pads but
+no `Dac` API here).
 
 Decision / catalog: [Klin issue 061](https://github.com/klin-lang/klin/blob/main/issues/061-micropython-machine-api.md),
-targets [062](https://github.com/klin-lang/klin/blob/main/issues/062-targets-esp-rp.md).
+targets [062](https://github.com/klin-lang/klin/blob/main/issues/062-targets-esp-rp.md),
+S3 port [099](https://github.com/klin-lang/klin/blob/main/issues/099-machine-esp-esp32-s3.md).
 
 ## Status
 
 | Chip | Pin | Pwm | Rc | Uart | I2c | Spi | Adc | Dac | Example | Boot |
 |---|---|---|---|---|---|---|---|---|---|---|
-| **ESP32-C3** | `pin_out` / `pin_in` | `pwm_out` | `rc_out` | `uart_out` | `i2c_out` | `spi_out` | `adc_out` | — (none on C3) | `blink_c3`, `pwm_c3`, `rc_c3`, `uart_c3`, `i2c_c3`, `spi_c3`, `adc_c3` | ESP-IDF v5.x |
-| Classic ESP32 (Xtensa), C6, S3 | later | — | — | — | — | — | — | — | — | — |
+| **ESP32-C3** | `pin_out` / `pin_in` | `pwm_out` | `rc_out` | `uart_out` | `i2c_out` | `spi_out` | `adc_out` | — | `*_c3` | ESP-IDF v5.x |
+| **ESP32-S3** | `pin_out_s3` / `pin_in_s3` | `pwm_out_s3` | `rc_out_s3` | `uart_out_s3` | `i2c_out_s3` | `spi_out_s3` | `adc_out_s3` | — | `*_s3` | ESP-IDF v5.x |
+| Classic ESP32 (Xtensa), C6 | later | — | — | — | — | — | — | — | — | — |
 | Freestanding (no IDF) | later | — | — | — | — | — | — | — | — | — |
 
-Target board: **ESP32-C3-DevKitM-1** (onboard LED ≈ **GPIO8**).  
-`version()` → `4` (`@v0.4.0`).
+C3 target board: **ESP32-C3-DevKitM-1** (onboard LED ≈ **GPIO8**).  
+S3 examples use **GPIO2** by default (Waveshare ESP32-S3-Pico D10 → GPIO35; WS2812 on GPIO21 is separate).  
+`version()` → `6` (`@v0.6.0`).
+
+### C3 vs S3 (do not mix in one binary)
+
+| Item | C3 | S3 |
+|---|---|---|
+| Factories | `pin_out`, `pwm_out`, … | `pin_out_s3`, `pwm_out_s3`, … |
+| GPIO pads | 0..21 | 0..21, 26..48 (22..25 none) |
+| Matrix simple-GPIO | `SIG_GPIO_OUT=128`, OEN bit 9 | `SIG_GPIO_OUT=256`, OEN bit 10 |
+| Matrix IN_SEL | bit 6, 5-bit gpio | bit 7, 6-bit gpio |
+| GPIO ≥ 32 | n/a | `OUT1` / `ENABLE1` / `IN1` |
+| SYSTEM CLK/RST | `+0x10` / `+0x18` | `+0x18` / `+0x20` |
+| UART signal | UART0=6, UART1=9 | UART0=12, UART1=15, UART2=18 |
+| LEDC out | `45+ch` (ch 0..5) | `73+ch` (ch 0..7) |
+| I2C0 SCL/SDA | 53 / 54 | 89 / 90 |
+| SPI2 FSPI | 63 / 64 / 65 | 101 / 102 / 103 |
+| ADC1 CH→GPIO | CH0..4 → GPIO0..4 | CH0..9 → GPIO1..10 |
+
+Clocks stay **explicit** in factory args (typically APB **80_000_000**, XTAL
+**40_000_000** under IDF).
 
 ## Requirements
 
 - [Klin](https://github.com/klin-lang/klin) compiler
-- For board examples: [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/stable/esp32c3/get-started/) **v5.x** (`IDF_PATH` exported)
+- For board examples: [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/get-started/) **v5.x** (`IDF_PATH` exported)
 
 ## Layout
 
 ```text
 machine_esp/
   version.kl
-  pin.kl / pwm.kl / rc.kl
-  uart.kl / i2c.kl / spi.kl / adc.kl
-  *_test.kl              # host math only; skipped on import
-examples/blink_c3/       # Pin toggle
-examples/pwm_c3/         # LEDC fade on GPIO8
-examples/rc_c3/          # LEDC RC/servo sweep on GPIO8
-examples/uart_c3/        # UART0 TX21/RX20 hello + echo
-examples/i2c_c3/         # I2C0 SDA8/SCL9 init + GPIO2 blink
-examples/spi_c3/         # SPI2 SCK6/MOSI7/MISO2 clock out
-examples/adc_c3/         # ADC1 CH0 GPIO0 → PWM GPIO8
+  pin.kl / pin_s3.kl
+  pwm.kl / pwm_s3.kl / rc.kl / rc_s3.kl
+  uart.kl / uart_s3.kl / i2c.kl / i2c_s3.kl
+  spi.kl / spi_s3.kl / adc.kl / adc_s3.kl
+  *_test.kl
+examples/*_c3/           # esp32c3
+examples/*_s3/           # esp32s3
 ```
 
-## Usage — Pin / Pwm / Rc
+## Usage — C3
 
 ```klin
 import "github/klin-lang/machine_esp" machine
 
 let led = machine.pin_out(8)
 let pwm = machine.pwm_out(8, 0, 0, 80000000)
-let servo = machine.rc_out(8, 0, 0, 80000000, 50, 1000, 2000)
+let u = machine.uart_out(0, 21, 20, 80000000, 115200)
 ```
 
-## Usage — Uart
-
-Caller passes instance (0/1), TX/RX GPIO, APB clock Hz, and baud. 8N1.
+## Usage — S3
 
 ```klin
 import "github/klin-lang/machine_esp" machine
 
-@[cexport, codename("klin_app_main")]
-fn uart_main() {
-    let u = machine.uart_out(0, 21, 20, 80000000, 115200)
-    u.write_u8(65)
-    if u.any() {
-        let b = u.read_u8()
-        u.write_u8(b)
-    }
-}
+let led = machine.pin_out_s3(2)          // Waveshare S3-Pico D10 → 35
+let pwm = machine.pwm_out_s3(2, 0, 0, 80000000)
+let u = machine.uart_out_s3(0, 17, 18, 80000000, 115200)
+let bus = machine.i2c_out_s3(0, 8, 9, 40000000, 100000)
+let s = machine.spi_out_s3(2, 12, 11, 13, 80000000, 1000000, 0)
+let adc = machine.adc_out_s3(1, 0)       // CH0 → GPIO1
+let servo = machine.rc_out_s3(2, 0, 0, 80000000, 50, 1000, 2000)
 ```
 
-## Usage — I2c
-
-I2C0 only (`i2c` arg kept for shape parity). SDA/SCL GPIO, source clock
-(typically XTAL **40_000_000**), and bus `freq_hz`. Open-drain + pull-up.
-7-bit addresses. Blocking transfers.
-
-```klin
-import "github/klin-lang/machine_esp" machine
-
-@[cexport, codename("klin_app_main")]
-fn i2c_main() {
-    let bus = machine.i2c_out(0, 8, 9, 40000000, 100000)
-    let mut w: [1]u8
-    w[0] = 0x00
-    bus.writeto(0x50, w)
-    let mut r: [2]u8
-    bus.readfrom_into(0x50, r)
-    bus.write_readfrom_into(0x50, 0x00, r)
-}
-```
-
-## Usage — Spi
-
-SPI2 (GPSPI) only. Soft CS — drive chip-select with a separate `Pin`.
-`mode` is 0..=3.
-
-```klin
-import "github/klin-lang/machine_esp" machine
-
-@[cexport, codename("klin_app_main")]
-fn spi_main() {
-    let s = machine.spi_out(2, 6, 7, 2, 80000000, 1000000, 0)
-    let cs = machine.pin_out(10)
-    cs.low()
-    let v = s.write_read_u8(0x9F)
-    cs.high()
-}
-```
-
-## Usage — Adc
-
-ADC1 only. Channels **0..=4** map to **GPIO0..=4**. Pass GPIO + channel
-explicitly. **No DAC** on this chip.
-
-```klin
-import "github/klin-lang/machine_esp" machine
-
-@[cexport, codename("klin_app_main")]
-fn adc_main() {
-    let adc = machine.adc_out(0, 0)
-    let raw = adc.read_u12()   // 0..=4095
-    let u16 = adc.read_u16()   // 0..=65535
-}
-```
-
-```sh
-klin get github/klin-lang/machine_esp@v0.4.0
-```
-
-## Shape (shared with other `machine_*`)
-
-| Piece | Role |
-|---|---|
-| `*_out(…)` | factory — chip-specific args OK; clocks explicit |
-| `deinit()` | stop peripheral (explicit) |
-| `writeto` / `readfrom_into` | I2C into caller buffers (no heap) |
-| `write_read_u8` / `readinto` | SPI full-duplex / fill buffer |
-| `read_u12` / `read_u16` | ADC raw / MicroPython-scaled |
+`uart_out_s3` accepts instance **0 / 1 / 2**. Soft SPI CS via a separate `Pin`.
 
 ## Examples
 
 ```sh
 . $IDF_PATH/export.sh
-cd examples/blink_c3   # or pwm_c3 / rc_c3 / uart_c3 / i2c_c3 / spi_c3 / adc_c3
+cd examples/blink_s3   # or pwm_s3 / uart_s3 / … / blink_c3 / …
 make emit KLIN=/path/to/klin/bin/klin.dart
 make build
 make flash
 ```
 
-Wi‑Fi, NVS, and IDF `gpio_*` / `ledc_*` / `uart_*` / `i2c_*` / `spi_*` /
-`adc_*` drivers are **out of scope** for this MVP.
+```sh
+klin get github/klin-lang/machine_esp@v0.6.0
+```
+
+Wi‑Fi, NVS, and IDF peripheral drivers are **out of scope**.
 
 ## Tests
 
@@ -161,7 +113,7 @@ Wi‑Fi, NVS, and IDF `gpio_*` / `ledc_*` / `uart_*` / `i2c_*` / `spi_*` /
 dart run /path/to/klin/bin/klin.dart test machine_esp/
 ```
 
-Host tests cover baud/div/base/scale math only (no MMIO).
+Host tests cover baud/div/base/scale math and S3 pin/UART/ADC maps (no MMIO).
 
 ## License
 
