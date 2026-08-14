@@ -1,0 +1,137 @@
+/// ESP32-P4 ADC1 oneshot (MMIO via LP_ADC, not HP SARADC 0x500DE000).
+/// Twin of `adc_out` / `adc_out_s3` — call `adc_out_p4` and `read_u12_p4`
+/// (C3/S3 `read_u12` is APB_SARADC; do not call it on P4).
+/// Channel → GPIO (ADC1 only):
+///   CH0→GPIO16 … CH7→GPIO23. ADC2 (GPIO49..54) later.
+/// Clocks: LPPERI (not HP_SYS_CLKRST / SYSTEM). No regi2c in this tag.
+module machine_esp
+
+/// Expected GPIO for ADC1 `channel` (0..=7). Out of range → −1.
+fn adc_p4_gpio_for_channel(channel: i32): i32 {
+    if channel < 0 {
+        return 0 - 1
+    }
+    if channel > 7 {
+        return 0 - 1
+    }
+    return channel + 16
+}
+
+/// LP_ADC register base (IDF `DR_REG_LP_ADC_BASE`). Host-testable.
+fn adc_p4_lp_base(): i32 {
+    return 0x50127000
+}
+
+/// LPPERI register base (IDF `DR_REG_LPPERI_BASE`). Host-testable.
+fn adc_p4_lpperi_base(): i32 {
+    return 0x50120000
+}
+
+fn adc_enable_clock_p4() {
+    // LPPERI_CLK_EN @ +0x0 — CK_EN_LP_ADC bit 23
+    let clk = cast(*mut volatile i32, 0x50120000)
+    *clk = *clk | (1 << 23)
+    // LPPERI_RESET_EN @ +0x8 — RST_EN_LP_ADC bit 24 (pulse)
+    let rst = cast(*mut volatile i32, 0x50120008)
+    *rst = *rst | (1 << 24)
+    *rst = *rst & ~(1 << 24)
+}
+
+fn adc_pad_analog_p4(num: i32) {
+    if pin_p4_ok(num) == 0 {
+        return
+    }
+    gpio_clock_enable_p4()
+    let mux = io_mux_reg_p4(num)
+    let mut v = *mux
+    v = v & ~(7 << 12)
+    v = v | (1 << 12)
+    v = v & ~(1 << 9)
+    v = v & ~(1 << 8)
+    v = v & ~(1 << 7)
+    *mux = v
+    let cfg = func_out_sel_cfg_p4(num)
+    *cfg = 256 | (1 << 10)
+    let en_clr = cast(*mut volatile i32, pin_p4_en_clr_reg(num))
+    *en_clr = pin_p4_mask(num)
+}
+
+/// Configure ADC1 on GPIO `num` for `channel` (0..=7).
+/// Attenuation defaults to 0 dB. Channel clamped to 0..=7.
+/// Returns `Adc` whose oneshot path is LP_ADC — use `read_u12_p4`.
+pub fn adc_out_p4(num: i32, channel: i32): Adc {
+    adc_enable_clock_p4()
+    let mut ch = channel
+    if ch < 0 {
+        ch = 0
+    }
+    if ch > 7 {
+        ch = 7
+    }
+    adc_pad_analog_p4(num)
+
+    let base = 0x50127000
+    let reader = cast(*mut volatile i32, base)
+    let meas = cast(*mut volatile i32, base + 0x0C)
+    let mux = cast(*mut volatile i32, base + 0x10)
+    let atten = cast(*mut volatile i32, base + 0x14)
+    let xpd = cast(*mut volatile i32, base + 0x3C)
+
+    // READER1_CTRL: sar1_clk_div = 1 (IDF oneshot ADC_LL_SAR_CLK_DIV_DEFAULT)
+    let mut r = *reader
+    r = r & ~255
+    r = r | 1
+    *reader = r
+
+    // FORCE_WPD_SAR: force_xpd_sar1 = 3 (SW power on)
+    let mut x = *xpd
+    x = x & ~3
+    x = x | 3
+    *xpd = x
+
+    // RTC controller (not HP digital): sar1_dig_force = 0
+    *mux = *mux & ~(1 << 31)
+    // SW start + SW pad bitmap
+    *meas = *meas | (1 << 18) | (1 << 31)
+
+    // atten 0 dB for this channel (2 bits / ch)
+    let mut a = *atten
+    a = a & ~(3 << (ch * 2))
+    *atten = a
+
+    let mut i: i32 = 0
+    while i < 100 {
+        i = i + 1
+    }
+
+    return Adc{
+        ctrl: xpd,
+        onetime: meas,
+        data: atten,
+        int_raw: mux,
+        int_clr: reader,
+        channel: ch
+    }
+}
+
+/// Blocking single conversion on LP_ADC — raw 12-bit result `0..=4095`.
+/// Do not call C3/S3 `read_u12` on a P4 `Adc`.
+pub fn (a: Adc) read_u12_p4(): i32 {
+    let ch = a.channel & 7
+    let mut v = *(a.onetime)
+    // clear start (bit 17) and en_pad [30:19]
+    v = v & ~(1 << 17)
+    v = v & ~(4095 << 19)
+    v = v | ((1 << ch) << 19)
+    v = v | (1 << 18) | (1 << 31)
+    *(a.onetime) = v
+    *(a.onetime) = *(a.onetime) | (1 << 17)
+    while (*(a.onetime) & (1 << 16)) == 0 {
+    }
+    return *(a.onetime) & 4095
+}
+
+/// MicroPython-style scale: `0..=65535` from 12-bit raw (LP_ADC path).
+pub fn (a: Adc) read_u16_p4(): i32 {
+    return adc_u12_to_u16(a.read_u12_p4())
+}

@@ -1,0 +1,15 @@
+module machine_esp
+
+import testing
+
+fn test_adc_p4_gpio_for_channel() {
+    testing.assert_eq_i32(adc_p4_gpio_for_channel(0), 16)
+    testing.assert_eq_i32(adc_p4_gpio_for_channel(7), 23)
+    testing.assert_eq_i32(adc_p4_gpio_for_channel(0 - 1), 0 - 1)
+    testing.assert_eq_i32(adc_p4_gpio_for_channel(8), 0 - 1)
+}
+
+fn test_adc_p4_bases() {
+    testing.assert_eq_i32(adc_p4_lp_base(), 0x50127000)
+    testing.assert_eq_i32(adc_p4_lpperi_base(), 0x50120000)
+}
