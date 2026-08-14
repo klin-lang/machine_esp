@@ -1,7 +1,8 @@
 /// ESP32-P4 LP GPIO Pin (MMIO). Same pads as HP GPIO 0..15, different controller.
 /// Call `pin_out_lp_p4` / `pin_in_lp_p4` — not `pin_out_p4` on the same pad.
 /// LP_GPIO @ 0x5012A000, LP_IOMUX @ 0x5012B000. SIG_LP_GPIO_OUT=32 (bits [8:3]).
-/// No hold / wakeup / LP matrix peri in this tag.
+/// LP matrix peri: `matrix_out_lp_p4` / `matrix_in_lp_p4` (OUT_SEL [8:3], IN_SEL [7:2]+SIG bit 1).
+/// No hold / wakeup in this tag.
 module machine_esp
 
 /// 1 when `num` is a valid LP GPIO (0..15); else 0 (host-testable).
@@ -61,6 +62,21 @@ fn pin_lp_p4_func_out_sel_reg(num: i32): i32 {
     return 0x5012A0F4 + num * 4
 }
 
+/// LP_GPIO_FUNCn_IN_SEL_CFG @ +0x74 + 4*sig. Host-testable.
+fn pin_lp_p4_func_in_sel_reg(sig: i32): i32 {
+    return 0x5012A074 + sig * 4
+}
+
+/// OUT_SEL in bits [8:3] (IDF `func_out_sel`). Host-testable.
+fn pin_lp_p4_out_sel_word(sig: i32): i32 {
+    return sig << 3
+}
+
+/// SIG_IN_SEL bit 1 | pad in bits [7:2]. Host-testable.
+fn pin_lp_p4_in_sel_word(num: i32): i32 {
+    return (1 << 1) | ((num & 63) << 2)
+}
+
 /// Simple-GPIO matrix index (`SIG_LP_GPIO_OUT_IDX`). Host-testable.
 fn pin_lp_p4_sig_gpio_out(): i32 {
     return 32
@@ -95,7 +111,31 @@ fn configure_pad_lp_gpio_p4(num: i32, input: i32) {
     *pad = v
     // OUT_SEL = 32 in bits [8:3]
     let cfg = cast(*mut volatile i32, pin_lp_p4_func_out_sel_reg(num))
-    *cfg = 32 << 3
+    *cfg = pin_lp_p4_out_sel_word(32)
+}
+
+/// Route LP peripheral output `sig` onto LP GPIO `num` (OE from peripheral).
+fn matrix_out_lp_p4(num: i32, sig: i32) {
+    if pin_lp_p4_ok(num) == 0 {
+        return
+    }
+    configure_pad_lp_gpio_p4(num, 0)
+    let cfg = cast(*mut volatile i32, pin_lp_p4_func_out_sel_reg(num))
+    *cfg = pin_lp_p4_out_sel_word(sig)
+    let en_set = cast(*mut volatile i32, pin_lp_p4_en_set_reg())
+    *en_set = pin_lp_p4_mask(num)
+}
+
+/// Route LP GPIO `num` into LP peripheral input `sig` (FUN_IE on).
+fn matrix_in_lp_p4(num: i32, sig: i32) {
+    if pin_lp_p4_ok(num) == 0 {
+        return
+    }
+    configure_pad_lp_gpio_p4(num, 1)
+    let cfg = cast(*mut volatile i32, pin_lp_p4_func_in_sel_reg(sig))
+    *cfg = pin_lp_p4_in_sel_word(num)
+    let en_clr = cast(*mut volatile i32, pin_lp_p4_en_clr_reg())
+    *en_clr = pin_lp_p4_mask(num)
 }
 
 fn pin_lp_p4_inert(): Pin {

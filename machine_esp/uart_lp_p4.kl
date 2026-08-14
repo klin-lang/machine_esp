@@ -1,0 +1,160 @@
+/// ESP32-P4 LP UART (MMIO). Call `uart_out_lp_p4` — not `uart_out_p4`.
+/// One instance. Base 0x50121000 (not HP UART0 0x500CA000).
+/// LP matrix TXD/RXD idx 2; pads 0..15 only.
+/// STATUS FIFO: RX [7:3], TX [23:19] — not HP bits. Type `UartLp`.
+/// Clock: LPPERI CK_EN_LP_UART bit 29; sclk XTAL_D2 (20 MHz typical).
+module machine_esp
+
+/// LP UART handle. Do not pass to `Uart` methods — FIFO bitfields differ.
+pub struct UartLp {
+    fifo: *mut volatile i32
+    status: *mut volatile i32
+    conf0: *mut volatile i32
+    clk_conf: *mut volatile i32
+}
+
+/// IDF `DR_REG_LP_UART_BASE`. Host-testable.
+fn uart_lp_p4_base(): i32 {
+    return 0x50121000
+}
+
+/// `LP_UART_TXD_PAD_OUT_IDX` / `LP_UART_RXD_PAD_IN_IDX`. Host-testable.
+fn uart_lp_p4_sig(): i32 {
+    return 2
+}
+
+/// `SOC_LP_UART_FIFO_LEN`. Host-testable.
+fn uart_lp_p4_fifo_len(): i32 {
+    return 16
+}
+
+/// RXFIFO_CNT bit position (IDF `LP_UART_RXFIFO_CNT_S`). Host-testable.
+fn uart_lp_p4_rxfifo_shift(): i32 {
+    return 3
+}
+
+/// TXFIFO_CNT bit position (IDF `LP_UART_TXFIFO_CNT_S`). Host-testable.
+fn uart_lp_p4_txfifo_shift(): i32 {
+    return 19
+}
+
+fn uart_lp_p4_fifo_mask(): i32 {
+    return 31
+}
+
+/// LPPERI `CK_EN_LP_UART`. Host-testable.
+fn uart_lp_p4_clk_en_bit(): i32 {
+    return 29
+}
+
+/// LPPERI `RST_EN_LP_UART`. Host-testable.
+fn uart_lp_p4_rst_bit(): i32 {
+    return 28
+}
+
+/// `LPPERI_LP_UART_CLK_SEL` value for XTAL_D2. Host-testable.
+fn uart_lp_p4_clk_sel_xtal_d2(): i32 {
+    return 1
+}
+
+fn uart_lp_p4_rxfifo_cnt(status: i32): i32 {
+    return (status >> uart_lp_p4_rxfifo_shift()) & uart_lp_p4_fifo_mask()
+}
+
+fn uart_lp_p4_txfifo_cnt(status: i32): i32 {
+    return (status >> uart_lp_p4_txfifo_shift()) & uart_lp_p4_fifo_mask()
+}
+
+fn uart_lp_enable_clock_p4() {
+    lp_gpio_clock_enable_p4()
+    // LPPERI_CLK_EN — CK_EN_LP_UART bit 29
+    let peri = cast(*mut volatile i32, 0x50120000)
+    *peri = *peri | (1 << 29)
+    // LPPERI_RESET_EN — pulse RST_EN_LP_UART bit 28
+    let rst = cast(*mut volatile i32, 0x50120008)
+    *rst = *rst | (1 << 28)
+    *rst = *rst & ~(1 << 28)
+    // LPPERI_CORE_CLK_SEL — LP_UART_CLK_SEL = 1 (XTAL_D2) in bits [31:30]
+    let sel = cast(*mut volatile i32, 0x50120004)
+    let mut v = *sel
+    v = v & ~(3 << 30)
+    v = v | (uart_lp_p4_clk_sel_xtal_d2() << 30)
+    *sel = v
+}
+
+/// Configure the single LP UART on LP GPIO TX/RX (0..15). 8N1.
+/// `uart_clk_hz` is the sclk after LPPERI select (XTAL_D2 typical 20 MHz).
+/// Do not also call `uart_out_p4` / `pin_out_lp_p4` on the same pads.
+pub fn uart_out_lp_p4(tx: i32, rx: i32, uart_clk_hz: i32, baud: i32): UartLp {
+    uart_lp_enable_clock_p4()
+    let sig = uart_lp_p4_sig()
+    matrix_out_lp_p4(tx, sig)
+    matrix_in_lp_p4(rx, sig)
+
+    let base = uart_lp_p4_base()
+    let fifo = cast(*mut volatile i32, base)
+    let clkdiv = cast(*mut volatile i32, base + 0x14)
+    let status = cast(*mut volatile i32, base + 0x1C)
+    let conf0 = cast(*mut volatile i32, base + 0x20)
+    let clk_conf = cast(*mut volatile i32, base + 0x88)
+    let update = cast(*mut volatile i32, base + 0x98)
+
+    // TX_SCLK_EN | RX_SCLK_EN (source is LPPERI XTAL_D2, not HP SCLK_SEL)
+    *clk_conf = (1 << 24) | (1 << 25)
+    let div_int = uart_clkdiv_int(uart_clk_hz, baud)
+    let frag = uart_clkdiv_frag(uart_clk_hz, baud)
+    *clkdiv = (div_int & 4095) | ((frag & 15) << 20)
+    // 8N1; pulse FIFO reset (bits 23/22, same as HP P4)
+    *conf0 = (3 << 2) | (1 << 4) | (1 << 22) | (1 << 23)
+    *conf0 = (3 << 2) | (1 << 4)
+    *update = 1
+    while (*update & 1) != 0 {
+    }
+
+    return UartLp{ fifo: fifo, status: status, conf0: conf0, clk_conf: clk_conf }
+}
+
+/// Blocking write one byte (`b` masked to 8 bits). Waits for TX FIFO room.
+pub fn (u: UartLp) write_u8(b: i32) {
+    let lim = uart_lp_p4_fifo_len() - 1
+    while uart_lp_p4_txfifo_cnt(*(u.status)) >= lim {
+    }
+    *(u.fifo) = b & 255
+}
+
+/// True when RXFIFO_CNT > 0.
+pub fn (u: UartLp) any(): bool {
+    return uart_lp_p4_rxfifo_cnt(*(u.status)) != 0
+}
+
+/// Blocking read one byte (0..=255).
+pub fn (u: UartLp) read_u8(): i32 {
+    while uart_lp_p4_rxfifo_cnt(*(u.status)) == 0 {
+    }
+    return *(u.fifo) & 255
+}
+
+/// Non-blocking read: byte 0..=255, or −1 if RX empty.
+pub fn (u: UartLp) try_read_u8(): i32 {
+    if uart_lp_p4_rxfifo_cnt(*(u.status)) == 0 {
+        return 0 - 1
+    }
+    return *(u.fifo) & 255
+}
+
+/// Blocking write of every byte in `buf`.
+pub fn (u: UartLp) write(buf: []u8) {
+    let lim = uart_lp_p4_fifo_len() - 1
+    let mut i: i32 = 0
+    while i < buf.len {
+        while uart_lp_p4_txfifo_cnt(*(u.status)) >= lim {
+        }
+        *(u.fifo) = u8_as_i32(buf[i])
+        i = i + 1
+    }
+}
+
+/// Disable LP UART TX/RX sclk (does not restore LP GPIO matrix).
+pub fn (u: UartLp) deinit() {
+    *(u.clk_conf) = 0
+}
