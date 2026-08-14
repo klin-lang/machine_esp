@@ -1,0 +1,26 @@
+module machine_esp
+
+import testing
+
+fn test_pin_lp_p4_ok_range() {
+    testing.assert_eq_i32(pin_lp_p4_ok(0), 1)
+    testing.assert_eq_i32(pin_lp_p4_ok(2), 1)
+    testing.assert_eq_i32(pin_lp_p4_ok(15), 1)
+    testing.assert_eq_i32(pin_lp_p4_ok(16), 0)
+    testing.assert_eq_i32(pin_lp_p4_ok(0 - 1), 0)
+}
+
+fn test_pin_lp_p4_bases() {
+    testing.assert_eq_i32(pin_lp_p4_base(), 0x5012A000)
+    testing.assert_eq_i32(pin_lp_p4_iomux_base(), 0x5012B000)
+    testing.assert_eq_i32(pin_lp_p4_out_reg(), 0x5012A008)
+    testing.assert_eq_i32(pin_lp_p4_in_reg(), 0x5012A030)
+    testing.assert_eq_i32(pin_lp_p4_sig_gpio_out(), 32)
+}
+
+fn test_pin_lp_p4_pad_and_sel() {
+    testing.assert_eq_i32(pin_lp_p4_pad_reg(0), 0x5012B008)
+    testing.assert_eq_i32(pin_lp_p4_pad_reg(2), 0x5012B010)
+    testing.assert_eq_i32(pin_lp_p4_func_out_sel_reg(0), 0x5012A0F4)
+    testing.assert_eq_i32(pin_lp_p4_func_out_sel_reg(2), 0x5012A0FC)
+}

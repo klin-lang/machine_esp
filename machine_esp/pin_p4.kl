@@ -1,7 +1,7 @@
 // ESP32-P4 HP GPIO Pin (MMIO). Twin of C3 `pin_out` / S3 `pin_out_s3` — call `*_p4`.
 // Not a copy of C3/S3 maps: GPIO @ 0x500E0000, IO_MUX @ 0x500E1000 (IDF soc / TRM).
 // Pads: HP GPIO 0..54. Matrix: SIG_GPIO_OUT=256, OEN_SEL bit 10. Bank1 for ≥32.
-// LP GPIO is a different controller — not this API. Track [114].
+// LP GPIO is a different controller — `pin_out_lp_p4` / `pin_in_lp_p4`. Track [114].
 module machine_esp
 
 /// 1 when `num` is a valid HP GPIO (0..54); else 0 (host-testable).

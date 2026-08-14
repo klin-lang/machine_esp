@@ -1,0 +1,19 @@
+// ESP32-P4 LP GPIO blink via machine_esp.pin_out_lp_p4.
+// Default LP GPIO2 (same pad as HP GPIO2). Do not also call pin_out_p4(2).
+import "../../machine_esp" machine
+
+@[cexport, codename("klin_app_main")]
+fn blink_main() {
+    let led = machine.pin_out_lp_p4(2)
+    while true {
+        led.toggle()
+        let mut i: i32 = 0
+        while i < 2000000 {
+            i = i + 1
+        }
+    }
+}
+
+fn main() {
+    blink_main()
+}

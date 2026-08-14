@@ -1,0 +1,164 @@
+/// ESP32-P4 LP GPIO Pin (MMIO). Same pads as HP GPIO 0..15, different controller.
+/// Call `pin_out_lp_p4` / `pin_in_lp_p4` — not `pin_out_p4` on the same pad.
+/// LP_GPIO @ 0x5012A000, LP_IOMUX @ 0x5012B000. SIG_LP_GPIO_OUT=32 (bits [8:3]).
+/// No hold / wakeup / LP matrix peri in this tag.
+module machine_esp
+
+/// 1 when `num` is a valid LP GPIO (0..15); else 0 (host-testable).
+fn pin_lp_p4_ok(num: i32): i32 {
+    if num < 0 {
+        return 0
+    }
+    if num > 15 {
+        return 0
+    }
+    return 1
+}
+
+fn pin_lp_p4_mask(num: i32): i32 {
+    return 1 << num
+}
+
+/// LP_GPIO register base (IDF `DR_REG_LP_GPIO_BASE`). Host-testable.
+fn pin_lp_p4_base(): i32 {
+    return 0x5012A000
+}
+
+/// LP_IOMUX register base (IDF `DR_REG_LP_IOMUX_BASE`). Host-testable.
+fn pin_lp_p4_iomux_base(): i32 {
+    return 0x5012B000
+}
+
+fn pin_lp_p4_out_reg(): i32 {
+    return 0x5012A008
+}
+
+fn pin_lp_p4_out_set_reg(): i32 {
+    return 0x5012A00C
+}
+
+fn pin_lp_p4_out_clr_reg(): i32 {
+    return 0x5012A010
+}
+
+fn pin_lp_p4_en_set_reg(): i32 {
+    return 0x5012A018
+}
+
+fn pin_lp_p4_en_clr_reg(): i32 {
+    return 0x5012A01C
+}
+
+fn pin_lp_p4_in_reg(): i32 {
+    return 0x5012A030
+}
+
+fn pin_lp_p4_pad_reg(num: i32): i32 {
+    return 0x5012B008 + num * 4
+}
+
+fn pin_lp_p4_func_out_sel_reg(num: i32): i32 {
+    return 0x5012A0F4 + num * 4
+}
+
+/// Simple-GPIO matrix index (`SIG_LP_GPIO_OUT_IDX`). Host-testable.
+fn pin_lp_p4_sig_gpio_out(): i32 {
+    return 32
+}
+
+fn lp_gpio_clock_enable_p4() {
+    // LPPERI_CLK_EN — CK_EN_LP_IOMUX bit 20
+    let peri = cast(*mut volatile i32, 0x50120000)
+    *peri = *peri | (1 << 20)
+    // LP_GPIO_CLK_EN bit 0
+    let gate = cast(*mut volatile i32, 0x5012A000)
+    *gate = *gate | 1
+}
+
+fn configure_pad_lp_gpio_p4(num: i32, input: i32) {
+    lp_gpio_clock_enable_p4()
+    let pad = cast(*mut volatile i32, pin_lp_p4_pad_reg(num))
+    let mut v = *pad
+    // DRV=2, RDE=0, RUE=0, MUX_SEL=1 (LP), FUN_SEL=1 (LP_GPIO)
+    v = v & ~3
+    v = v | 2
+    v = v & ~(1 << 2)
+    v = v & ~(1 << 3)
+    v = v | (1 << 4)
+    v = v & ~(3 << 5)
+    v = v | (1 << 5)
+    if input != 0 {
+        v = v | (1 << 10)
+    } else {
+        v = v & ~(1 << 10)
+    }
+    *pad = v
+    // OUT_SEL = 32 in bits [8:3]
+    let cfg = cast(*mut volatile i32, pin_lp_p4_func_out_sel_reg(num))
+    *cfg = 32 << 3
+}
+
+fn pin_lp_p4_inert(): Pin {
+    let out = cast(*mut volatile i32, 0x5012A008)
+    let out_set = cast(*mut volatile i32, 0x5012A00C)
+    let out_clr = cast(*mut volatile i32, 0x5012A010)
+    let gpio_in = cast(*mut volatile i32, 0x5012A030)
+    return Pin{
+        out: out,
+        out_set: out_set,
+        out_clr: out_clr,
+        gpio_in: gpio_in,
+        mask: 0
+    }
+}
+
+/// Configure LP GPIO `num` as push-pull output (0..15; same pad as HP GPIO n).
+/// Out of range → inert Pin (mask 0); no MMIO.
+/// Do not also call `pin_out_p4` on the same pad.
+pub fn pin_out_lp_p4(num: i32): Pin {
+    if pin_lp_p4_ok(num) == 0 {
+        return pin_lp_p4_inert()
+    }
+    configure_pad_lp_gpio_p4(num, 0)
+
+    let mask = pin_lp_p4_mask(num)
+    let en_set = cast(*mut volatile i32, pin_lp_p4_en_set_reg())
+    *en_set = mask
+
+    let out = cast(*mut volatile i32, pin_lp_p4_out_reg())
+    let out_set = cast(*mut volatile i32, pin_lp_p4_out_set_reg())
+    let out_clr = cast(*mut volatile i32, pin_lp_p4_out_clr_reg())
+    let gpio_in = cast(*mut volatile i32, pin_lp_p4_in_reg())
+    return Pin{
+        out: out,
+        out_set: out_set,
+        out_clr: out_clr,
+        gpio_in: gpio_in,
+        mask: mask
+    }
+}
+
+/// Configure LP GPIO `num` as floating input (0..15).
+/// Out of range → inert Pin (mask 0); no MMIO.
+pub fn pin_in_lp_p4(num: i32): Pin {
+    if pin_lp_p4_ok(num) == 0 {
+        return pin_lp_p4_inert()
+    }
+    configure_pad_lp_gpio_p4(num, 1)
+
+    let mask = pin_lp_p4_mask(num)
+    let en_clr = cast(*mut volatile i32, pin_lp_p4_en_clr_reg())
+    *en_clr = mask
+
+    let out = cast(*mut volatile i32, pin_lp_p4_out_reg())
+    let out_set = cast(*mut volatile i32, pin_lp_p4_out_set_reg())
+    let out_clr = cast(*mut volatile i32, pin_lp_p4_out_clr_reg())
+    let gpio_in = cast(*mut volatile i32, pin_lp_p4_in_reg())
+    return Pin{
+        out: out,
+        out_set: out_set,
+        out_clr: out_clr,
+        gpio_in: gpio_in,
+        mask: mask
+    }
+}
