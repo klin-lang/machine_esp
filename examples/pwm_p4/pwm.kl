@@ -1,0 +1,33 @@
+// ESP32-P4 LEDC PWM via machine_esp.pwm_out_p4 (GPIO2, ch0, timer0).
+// LEDC source clock: APB 80 MHz typical under ESP-IDF — pass explicitly.
+import "../../machine_esp" machine
+
+@[cexport, codename("klin_app_main")]
+fn pwm_main() {
+    let led = machine.pwm_out_p4(2, 0, 0, 80000000)
+    led.freq_p4(1000)
+    while true {
+        let mut d: i32 = 0
+        while d <= 65535 {
+            led.duty_u16(d)
+            let mut i: i32 = 0
+            while i < 8000 {
+                i = i + 1
+            }
+            d = d + 1024
+        }
+        d = 65535
+        while d >= 0 {
+            led.duty_u16(d)
+            let mut i: i32 = 0
+            while i < 8000 {
+                i = i + 1
+            }
+            d = d - 1024
+        }
+    }
+}
+
+fn main() {
+    pwm_main()
+}

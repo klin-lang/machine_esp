@@ -1,0 +1,34 @@
+/// RC / hobby-servo on ESP32-P4 LEDC. Twin of `rc_out` — call `rc_out_p4`.
+module machine_esp
+
+fn rc_from_pwm_p4(pwm: Pwm, freq_hz: i32, us_min: i32, us_max: i32): Rc {
+    let mut f = freq_hz
+    if f < 1 {
+        f = 1
+    }
+    pwm.freq_p4(f)
+    let period_us = 1000000 / f
+    let rc = Rc{
+        pwm: pwm,
+        freq_hz: f,
+        us_min: us_min,
+        us_max: us_max,
+        period_us: period_us
+    }
+    rc.pulse_us((us_min + us_max) / 2)
+    return rc
+}
+
+/// Same HW args as `pwm_out_p4`, plus RC frame rate and pulse range (µs).
+pub fn rc_out_p4(
+    num: i32,
+    ch: i32,
+    tim: i32,
+    ledc_clk_hz: i32,
+    freq_hz: i32,
+    us_min: i32,
+    us_max: i32
+): Rc {
+    let pwm = pwm_out_p4(num, ch, tim, ledc_clk_hz)
+    return rc_from_pwm_p4(pwm, freq_hz, us_min, us_max)
+}

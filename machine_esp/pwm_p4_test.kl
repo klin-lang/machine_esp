@@ -1,0 +1,9 @@
+module machine_esp
+
+import testing
+
+fn test_pwm_p4_ledc_addrs() {
+    testing.assert_eq_i32(0x500D3000, 0x500D3000)
+    testing.assert_eq_i32(126 + 0, 126)
+    testing.assert_eq_i32(126 + 7, 133)
+}

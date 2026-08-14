@@ -1,0 +1,16 @@
+module machine_esp
+
+import testing
+
+fn test_uart_base_p4_map() {
+    testing.assert_eq_i32(uart_base_p4(0), 0x500CA000)
+    testing.assert_eq_i32(uart_base_p4(1), 0x500CB000)
+    testing.assert_eq_i32(uart_base_p4(4), 0x500CE000)
+}
+
+fn test_uart_sig_p4_map() {
+    testing.assert_eq_i32(uart_sig_p4(0), 10)
+    testing.assert_eq_i32(uart_sig_p4(1), 13)
+    testing.assert_eq_i32(uart_sig_p4(2), 16)
+    testing.assert_eq_i32(uart_sig_p4(4), 22)
+}
