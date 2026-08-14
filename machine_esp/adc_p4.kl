@@ -1,8 +1,8 @@
-/// ESP32-P4 ADC1 oneshot (MMIO via LP_ADC, not HP SARADC 0x500DE000).
-/// Twin of `adc_out` / `adc_out_s3` — call `adc_out_p4` and `read_u12_p4`
-/// (C3/S3 `read_u12` is APB_SARADC; do not call it on P4).
-/// Channel → GPIO (ADC1 only):
-///   CH0→GPIO16 … CH7→GPIO23. ADC2 (GPIO49..54) later.
+/// ESP32-P4 ADC1/ADC2 oneshot (MMIO via LP_ADC, not HP SARADC 0x500DE000).
+/// Twin of `adc_out` / `adc_out_s3` — call `adc_out_p4` / `adc2_out_p4`
+/// and `read_u12_p4` (C3/S3 `read_u12` is APB_SARADC; do not call it on P4).
+/// ADC1: CH0→GPIO16 … CH7→GPIO23.
+/// ADC2: CH0→GPIO49 … CH5→GPIO54 (IDF en_pad bit = channel+2).
 /// Clocks: LPPERI (not HP_SYS_CLKRST / SYSTEM). No regi2c in this tag.
 module machine_esp
 
@@ -25,6 +25,28 @@ fn adc_p4_lp_base(): i32 {
 /// LPPERI register base (IDF `DR_REG_LPPERI_BASE`). Host-testable.
 fn adc_p4_lpperi_base(): i32 {
     return 0x50120000
+}
+
+/// Expected GPIO for ADC2 `channel` (0..=5). Out of range → −1.
+fn adc2_p4_gpio_for_channel(channel: i32): i32 {
+    if channel < 0 {
+        return 0 - 1
+    }
+    if channel > 5 {
+        return 0 - 1
+    }
+    return channel + 49
+}
+
+/// IDF `sar2_en_pad` bit index: `channel + 2`. Out of range → −1.
+fn adc2_p4_hw_pad(channel: i32): i32 {
+    if channel < 0 {
+        return 0 - 1
+    }
+    if channel > 5 {
+        return 0 - 1
+    }
+    return channel + 2
 }
 
 fn adc_enable_clock_p4() {
@@ -111,6 +133,69 @@ pub fn adc_out_p4(num: i32, channel: i32): Adc {
         int_raw: mux,
         int_clr: reader,
         channel: ch
+    }
+}
+
+/// Configure ADC2 on GPIO `num` for `channel` (0..=5).
+/// Attenuation defaults to 0 dB. Channel clamped to 0..=5.
+/// `read_u12_p4` reuses MEAS2 (same start/done/data bits as MEAS1).
+pub fn adc2_out_p4(num: i32, channel: i32): Adc {
+    adc_enable_clock_p4()
+    let mut ch = channel
+    if ch < 0 {
+        ch = 0
+    }
+    if ch > 5 {
+        ch = 5
+    }
+    let pad = ch + 2
+    adc_pad_analog_p4(num)
+
+    let base = 0x50127000
+    let reader = cast(*mut volatile i32, base + 0x24)
+    let meas = cast(*mut volatile i32, base + 0x30)
+    let mux = cast(*mut volatile i32, base + 0x34)
+    let atten = cast(*mut volatile i32, base + 0x38)
+    let xpd = cast(*mut volatile i32, base + 0x3C)
+
+    // READER2_CTRL: sar2_clk_div = 1
+    let mut r = *reader
+    r = r & ~255
+    r = r | 1
+    *reader = r
+
+    // FORCE_WPD_SAR: force_xpd_sar2 [3:2] = 3 (SW power on)
+    let mut x = *xpd
+    x = x & ~(3 << 2)
+    x = x | (3 << 2)
+    *xpd = x
+
+    // RTC controller: sar2_rtc_force=1; PWDET_CCT=4 (IDF default)
+    let mut m = *mux
+    m = m | (1 << 31)
+    m = m & ~(7 << 28)
+    m = m | (4 << 28)
+    *mux = m
+    // SW start + SW pad bitmap
+    *meas = *meas | (1 << 18) | (1 << 31)
+
+    // atten 0 dB at hardware pad (channel+2)
+    let mut a = *atten
+    a = a & ~(3 << (pad * 2))
+    *atten = a
+
+    let mut i: i32 = 0
+    while i < 100 {
+        i = i + 1
+    }
+
+    return Adc{
+        ctrl: xpd,
+        onetime: meas,
+        data: atten,
+        int_raw: mux,
+        int_clr: reader,
+        channel: pad
     }
 }
 
