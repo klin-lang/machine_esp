@@ -1,0 +1,7 @@
+module machine_esp
+
+import testing
+
+fn test_i2c_base_p4() {
+    testing.assert_eq_i32(i2c_base_p4(), 0x500C4000)
+}

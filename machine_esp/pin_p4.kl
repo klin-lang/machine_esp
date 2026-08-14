@@ -81,6 +81,80 @@ fn func_out_sel_cfg_p4(num: i32): *mut volatile i32 {
     return cast(*mut volatile i32, 0x500E0558 + num * 4)
 }
 
+fn func_in_sel_cfg_p4(sig: i32): *mut volatile i32 {
+    // GPIO_FUNCn_IN_SEL_CFG_REG @ 0x500E0158 + 4*sig
+    return cast(*mut volatile i32, 0x500E0158 + sig * 4)
+}
+
+/// Route peripheral output `sig` onto HP GPIO `num` (OE from peripheral).
+fn matrix_out_p4(num: i32, sig: i32) {
+    if pin_p4_ok(num) == 0 {
+        return
+    }
+    gpio_clock_enable_p4()
+    let mux = io_mux_reg_p4(num)
+    let mut v = *mux
+    v = v & ~(7 << 12)
+    v = v | (1 << 12)
+    v = v & ~(3 << 10)
+    v = v | (2 << 10)
+    v = v & ~(1 << 9)
+    v = v & ~(1 << 8)
+    v = v & ~(1 << 7)
+    *mux = v
+    let cfg = func_out_sel_cfg_p4(num)
+    *cfg = sig
+    let en_set = cast(*mut volatile i32, pin_p4_en_set_reg(num))
+    *en_set = pin_p4_mask(num)
+}
+
+/// Route HP GPIO `num` into peripheral input `sig` (FUN_IE on).
+fn matrix_in_p4(num: i32, sig: i32) {
+    if pin_p4_ok(num) == 0 {
+        return
+    }
+    gpio_clock_enable_p4()
+    let mux = io_mux_reg_p4(num)
+    let mut v = *mux
+    v = v & ~(7 << 12)
+    v = v | (1 << 12)
+    v = v & ~(3 << 10)
+    v = v | (2 << 10)
+    v = v | (1 << 9)
+    v = v & ~(1 << 8)
+    v = v & ~(1 << 7)
+    *mux = v
+    // SIG_IN_SEL (bit 7) | 6-bit gpio
+    let cfg = func_in_sel_cfg_p4(sig)
+    *cfg = (1 << 7) | (num & 63)
+    let en_clr = cast(*mut volatile i32, pin_p4_en_clr_reg(num))
+    *en_clr = pin_p4_mask(num)
+}
+
+/// Bidirectional open-drain pad (I2C): matrix out+in, pull-up, OE from peri.
+fn matrix_od_pu_p4(num: i32, sig: i32) {
+    if pin_p4_ok(num) == 0 {
+        return
+    }
+    gpio_clock_enable_p4()
+    let mux = io_mux_reg_p4(num)
+    let mut v = *mux
+    v = v & ~(7 << 12)
+    v = v | (1 << 12)
+    v = v & ~(3 << 10)
+    v = v | (2 << 10)
+    v = v | (1 << 9)
+    v = v | (1 << 8)
+    v = v & ~(1 << 7)
+    *mux = v
+    let out = func_out_sel_cfg_p4(num)
+    *out = sig
+    let inp = func_in_sel_cfg_p4(sig)
+    *inp = (1 << 7) | (num & 63)
+    let en_set = cast(*mut volatile i32, pin_p4_en_set_reg(num))
+    *en_set = pin_p4_mask(num)
+}
+
 fn configure_pad_gpio_p4(num: i32, input: i32) {
     gpio_clock_enable_p4()
 

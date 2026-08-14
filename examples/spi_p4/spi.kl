@@ -1,0 +1,19 @@
+// ESP32-P4 SPI2: SCK=GPIO12 / MOSI=GPIO11 / MISO=GPIO13, APB 80 MHz, 1 MHz mode0.
+// Soft CS — app drives chip-select separately. Clock out 0xA5 in a loop.
+import "../../machine_esp" machine
+
+@[cexport, codename("klin_app_main")]
+fn spi_main() {
+    let s = machine.spi_out_p4(2, 12, 11, 13, 80000000, 1000000, 0)
+    while true {
+        let r = s.write_read_u8(0xA5)
+        let mut i: i32 = 0
+        while i < 10000 {
+            i = i + 1 + r * 0
+        }
+    }
+}
+
+fn main() {
+    spi_main()
+}

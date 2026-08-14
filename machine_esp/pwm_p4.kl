@@ -1,0 +1,94 @@
+/// ESP32-P4 LEDC PWM (MMIO). Twin of `pwm_out` — call `pwm_out_p4`.
+/// LEDC @ 0x500D3000. Clocks: HP_SYS_CLKRST (not SYSTEM 0x600C…).
+/// LEDC_LS_SIG_OUT0 = 126; channels 0..=7.
+/// Timer CONF layout differs from C3/S3 — use `freq_p4`, not `freq`.
+module machine_esp
+
+fn system_ledc_enable_p4() {
+    // SOC_CLK_CTRL3 @ +0x20 — LEDC_APB_CLK_EN bit 0
+    let apb = cast(*mut volatile i32, 0x500E6020)
+    *apb = *apb | 1
+    // PERI_CLK_CTRL22 @ +0x9c — LEDC_CLK_EN bit 2
+    let peri = cast(*mut volatile i32, 0x500E609C)
+    *peri = *peri | (1 << 2)
+    // HP_RST_EN2 @ +0xc8 — RST_EN_LEDC bit 29 (hold out of reset)
+    let rst = cast(*mut volatile i32, 0x500E60C8)
+    *rst = *rst & ~(1 << 29)
+}
+
+fn ledc_select_apb_p4() {
+    // LEDC_CONF_REG @ +0x170 (not C3/S3 +0xD0): APB_CLK_SEL=0, CLK_EN bit 31
+    let conf = cast(*mut volatile i32, 0x500D3170)
+    *conf = 1 << 31
+}
+
+/// P4 timer: DUTY_RES[4:0], CLK_DIV[22:5], RST bit 24 (must be 0), PARA_UP bit 26.
+pub fn (p: Pwm) freq_p4(hz: i32) {
+    let mut f = hz
+    if f < 1 {
+        f = 1
+    }
+    let mut clk = p.ledc_clk_hz
+    if clk < 1 {
+        clk = 1
+    }
+    let md = max_duty(p.duty_res)
+    let mut per = f * md
+    if per < 1 {
+        per = 1
+    }
+    let q = clk / per
+    let r = clk - q * per
+    let mut div_param = q * 256 + (r * 256) / per
+    if div_param < 256 {
+        div_param = 256
+    }
+    if div_param > 262143 {
+        div_param = 262143
+    }
+    let conf = (p.duty_res & 31) | ((div_param & 262143) << 5)
+    *(p.timer_conf) = conf
+    *(p.timer_conf) = conf | (1 << 26)
+}
+
+/// Configure GPIO `num` as LEDC PWM on channel `ch` (0..=7), timer `tim`
+/// (0..=3). `ledc_clk_hz` is the LEDC source (PLL_F80M / APB typical 80 MHz).
+pub fn pwm_out_p4(num: i32, ch: i32, tim: i32, ledc_clk_hz: i32): Pwm {
+    system_ledc_enable_p4()
+    ledc_select_apb_p4()
+    let mut c = ch
+    if c < 0 {
+        c = 0
+    }
+    if c > 7 {
+        c = 7
+    }
+    matrix_out_p4(num, 126 + c)
+
+    let ch_base = 0x500D3000 + c * 0x14
+    let conf0 = cast(*mut volatile i32, ch_base)
+    let hpoint = cast(*mut volatile i32, ch_base + 0x04)
+    let duty = cast(*mut volatile i32, ch_base + 0x08)
+    let conf1 = cast(*mut volatile i32, ch_base + 0x0C)
+    let timer_conf = cast(*mut volatile i32, 0x500D30A0 + tim * 0x08)
+
+    let duty_res: i32 = 13
+
+    *hpoint = 0
+    *duty = 0
+    *conf0 = (tim & 3) | (1 << 2)
+
+    let pwm = Pwm{
+        conf0: conf0,
+        duty: duty,
+        conf1: conf1,
+        timer_conf: timer_conf,
+        duty_res: duty_res,
+        ledc_clk_hz: ledc_clk_hz
+    }
+    pwm.freq_p4(1000)
+    pwm.duty_u16(0)
+    *conf0 = *(pwm.conf0) | (1 << 4)
+    *conf1 = 1 << 31
+    return pwm
+}

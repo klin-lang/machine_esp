@@ -1,0 +1,95 @@
+/// ESP32-P4 GP-SPI2 master (MMIO). Twin of `spi_out` — call `spi_out_p4`.
+/// Base 0x500D0000. Signals: CLK=53, Q(MISO)=54, D(MOSI)=55. Soft CS via `Pin`.
+module machine_esp
+
+fn spi_base_p4(): i32 {
+    return 0x500D0000
+}
+
+fn spi_enable_clock_p4() {
+    // SOC_CLK_CTRL1 @ +0x18 — GPSPI2_SYS_CLK_EN bit 0
+    let sys = cast(*mut volatile i32, 0x500E6018)
+    *sys = *sys | 1
+    // SOC_CLK_CTRL2 @ +0x1c — GPSPI2_APB_CLK_EN bit 19
+    let apb = cast(*mut volatile i32, 0x500E601C)
+    *apb = *apb | (1 << 19)
+    // HP_RST_EN2 @ +0xc8 — RST_EN_SPI2 bit 7
+    let rst = cast(*mut volatile i32, 0x500E60C8)
+    *rst = *rst | (1 << 7)
+    *rst = *rst & ~(1 << 7)
+}
+
+/// Configure SPI2 master (`spi` must be 2). `mode` is 0..=3 (CPOL/CPHA).
+pub fn spi_out_p4(
+    spi: i32,
+    sck: i32,
+    mosi: i32,
+    miso: i32,
+    spi_clk_hz: i32,
+    baud_hz: i32,
+    mode: i32
+): Spi {
+    let _ = spi
+    spi_enable_clock_p4()
+    matrix_out_p4(sck, 53)
+    matrix_out_p4(mosi, 55)
+    matrix_in_p4(miso, 54)
+
+    let base = spi_base_p4()
+    let cmd = cast(*mut volatile i32, base)
+    let ctrl = cast(*mut volatile i32, base + 0x08)
+    let clock = cast(*mut volatile i32, base + 0x0C)
+    let user = cast(*mut volatile i32, base + 0x10)
+    let user1 = cast(*mut volatile i32, base + 0x14)
+    let ms_dlen = cast(*mut volatile i32, base + 0x1C)
+    let misc = cast(*mut volatile i32, base + 0x20)
+    let dma_conf = cast(*mut volatile i32, base + 0x30)
+    let dma_int_clr = cast(*mut volatile i32, base + 0x38)
+    let dma_int_raw = cast(*mut volatile i32, base + 0x3C)
+    let w0 = cast(*mut volatile i32, base + 0x98)
+    let clk_gate = cast(*mut volatile i32, base + 0xE8)
+
+    *clk_gate = (1 << 1) | (1 << 2)
+    *dma_conf = 0
+    *user1 = 0
+    *ctrl = 0
+    *misc = 0x3F
+    let mut m = mode
+    if m < 0 {
+        m = 0
+    }
+    if m > 3 {
+        m = 3
+    }
+    if m == 0 {
+        *misc = *misc & ~(1 << 29)
+        *user = 0
+    } else {
+        if m == 1 {
+            *misc = *misc & ~(1 << 29)
+            *user = 1 << 9
+        } else {
+            if m == 2 {
+                *misc = *misc | (1 << 29)
+                *user = 1 << 9
+            } else {
+                *misc = *misc | (1 << 29)
+                *user = 0
+            }
+        }
+    }
+    *user = *user | 1 | (1 << 27) | (1 << 28)
+    *clock = spi_clock_reg(spi_clk_hz, baud_hz)
+    *cmd = 1 << 23
+    while (*cmd & (1 << 23)) != 0 {
+    }
+
+    return Spi{
+        cmd: cmd,
+        user: user,
+        ms_dlen: ms_dlen,
+        w0: w0,
+        dma_int_raw: dma_int_raw,
+        dma_int_clr: dma_int_clr
+    }
+}

@@ -1,0 +1,70 @@
+/// ESP32-P4 UART (MMIO). Twin of `uart_out` — call `uart_out_p4`.
+/// HP instances 0..=4. Bases 0x500CA000 + n*0x1000.
+/// Signals: UART0=10, UART1=13, UART2=16, UART3=19, UART4=22.
+/// CLK_CONF @ +0x88; REG_UPDATE @ +0x98 bit 0 (not ID bit 31).
+module machine_esp
+
+fn uart_base_p4(uart: i32): i32 {
+    return 0x500CA000 + uart * 0x1000
+}
+
+fn uart_sig_p4(uart: i32): i32 {
+    return 10 + uart * 3
+}
+
+fn uart_enable_clock_p4(uart: i32) {
+    let mut u = uart
+    if u < 0 {
+        u = 0
+    }
+    if u > 4 {
+        u = 4
+    }
+    // SOC_CLK_CTRL1 @ +0x18 — UARTn_SYS_CLK_EN bit 18+n
+    let sys = cast(*mut volatile i32, 0x500E6018)
+    *sys = *sys | (1 << (18 + u))
+    // SOC_CLK_CTRL2 @ +0x1c — UARTn_APB_CLK_EN bit 7+n
+    let apb = cast(*mut volatile i32, 0x500E601C)
+    *apb = *apb | (1 << (7 + u))
+    // PERI_CLK_CTRL110+n @ +0x68 + 4*n — UARTn_CLK_EN bit 26
+    let peri = cast(*mut volatile i32, 0x500E6068 + u * 4)
+    *peri = *peri | (1 << 26)
+}
+
+/// Configure UART `uart` (0..=4) on TX/RX GPIOs. 8N1.
+/// `uart_clk_hz` is the sclk from HP_SYS_CLKRST (PLL_F80M typical 80 MHz).
+pub fn uart_out_p4(uart: i32, tx: i32, rx: i32, uart_clk_hz: i32, baud: i32): Uart {
+    let mut u = uart
+    if u < 0 {
+        u = 0
+    }
+    if u > 4 {
+        u = 4
+    }
+    uart_enable_clock_p4(u)
+    let sig = uart_sig_p4(u)
+    matrix_out_p4(tx, sig)
+    matrix_in_p4(rx, sig)
+
+    let base = uart_base_p4(u)
+    let fifo = cast(*mut volatile i32, base)
+    let clkdiv = cast(*mut volatile i32, base + 0x14)
+    let status = cast(*mut volatile i32, base + 0x1C)
+    let conf0 = cast(*mut volatile i32, base + 0x20)
+    let clk_conf = cast(*mut volatile i32, base + 0x88)
+    let update = cast(*mut volatile i32, base + 0x98)
+
+    // TX_SCLK_EN | RX_SCLK_EN (source is HP_SYS_CLKRST, not SCLK_SEL here)
+    *clk_conf = (1 << 24) | (1 << 25)
+    let div_int = uart_clkdiv_int(uart_clk_hz, baud)
+    let frag = uart_clkdiv_frag(uart_clk_hz, baud)
+    *clkdiv = (div_int & 4095) | ((frag & 15) << 20)
+    // 8N1; pulse FIFO reset (P4 bits 23/22, not C3 18/17)
+    *conf0 = (3 << 2) | (1 << 4) | (1 << 22) | (1 << 23)
+    *conf0 = (3 << 2) | (1 << 4)
+    *update = 1
+    while (*update & 1) != 0 {
+    }
+
+    return Uart{ fifo: fifo, status: status, conf0: conf0, clk_conf: clk_conf }
+}
