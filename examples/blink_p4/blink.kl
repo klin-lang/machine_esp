@@ -1,0 +1,21 @@
+// ESP32-P4 GPIO blink via machine_esp.pin_out_p4.
+// Default GPIO2 — pick a HP GPIO that is not flash/PSRAM on your board.
+import "../../machine_esp" machine
+
+@[cexport, codename("klin_app_main")]
+fn blink_main() {
+    let led = machine.pin_out_p4(2)
+    while true {
+        led.toggle()
+        // Busy-wait (CPU freq depends on IDF sdkconfig; tune on hardware).
+        let mut i: i32 = 0
+        while i < 2000000 {
+            i = i + 1
+        }
+    }
+}
+
+// Required by Klin checker; stripped to static when linking under ESP-IDF.
+fn main() {
+    blink_main()
+}

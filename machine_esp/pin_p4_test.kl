@@ -1,0 +1,30 @@
+module machine_esp
+
+import testing
+
+fn test_pin_p4_ok_range() {
+    testing.assert_eq_i32(pin_p4_ok(0), 1)
+    testing.assert_eq_i32(pin_p4_ok(2), 1)
+    testing.assert_eq_i32(pin_p4_ok(31), 1)
+    testing.assert_eq_i32(pin_p4_ok(32), 1)
+    testing.assert_eq_i32(pin_p4_ok(54), 1)
+    testing.assert_eq_i32(pin_p4_ok(55), 0)
+    testing.assert_eq_i32(pin_p4_ok(0 - 1), 0)
+}
+
+fn test_pin_p4_mask_banks() {
+    testing.assert_eq_i32(pin_p4_mask(0), 1)
+    testing.assert_eq_i32(pin_p4_mask(2), 4)
+    testing.assert_eq_i32(pin_p4_mask(30), 1073741824)
+    testing.assert_eq_i32(pin_p4_mask(32), 1)
+    testing.assert_eq_i32(pin_p4_mask(35), 8)
+}
+
+fn test_pin_p4_bank_addrs() {
+    testing.assert_eq_i32(pin_p4_out_reg(2), 0x500E0004)
+    testing.assert_eq_i32(pin_p4_out_reg(35), 0x500E0010)
+    testing.assert_eq_i32(pin_p4_en_set_reg(2), 0x500E0024)
+    testing.assert_eq_i32(pin_p4_en_set_reg(35), 0x500E0030)
+    testing.assert_eq_i32(pin_p4_in_reg(2), 0x500E003C)
+    testing.assert_eq_i32(pin_p4_in_reg(35), 0x500E0040)
+}
