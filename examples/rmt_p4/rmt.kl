@@ -1,0 +1,23 @@
+// ESP32-P4 RMT TX via machine_esp.rmt_tx_p4 (GPIO2, ch0).
+// Group clock: PLL_F80M 80 MHz typical under ESP-IDF — pass explicitly.
+// tick = src/8. Sends a short high/low pulse (LED blink if wired).
+import "../../machine_esp" machine
+
+@[cexport, codename("klin_app_main")]
+fn rmt_main() {
+    let r = machine.rmt_tx_p4(2, 0, 80000000)
+    while true {
+        r.put(0, machine.rmt_symbol(400, 1, 400, 0))
+        r.put(1, machine.rmt_symbol(0, 0, 0, 0))
+        r.start()
+        r.wait_done()
+        let mut i: i32 = 0
+        while i < 2000000 {
+            i = i + 1
+        }
+    }
+}
+
+fn main() {
+    rmt_main()
+}

@@ -1,0 +1,82 @@
+/// ESP32-P4 RMT TX (MMIO). Twin of `rmt_tx_s3` — call `rmt_tx_p4`.
+/// Base 0x500A2000, channel RAM at +0x800 (48 words/ch).
+/// Signal: RMT_SIG_OUT0 = 246 (+ ch). Clocks: HP_SYS_CLKRST (not SYSTEM).
+/// TX channels 0..=3 only. No DMA, no carrier. Reuses `Rmt.put` / `start` / `wait_done`.
+module machine_esp
+
+fn system_rmt_enable_p4() {
+    // SOC_CLK_CTRL2 @ +0x1c — RMT_SYS_CLK_EN bit 0
+    let sys = cast(*mut volatile i32, 0x500E601C)
+    *sys = *sys | 1
+    // PERI_CLK_CTRL22 @ +0x9c — SRC_SEL=2 (PLL_F80M), CLK_EN bit 5, DIV_NUM=0 (÷1)
+    let peri = cast(*mut volatile i32, 0x500E609C)
+    let mut v = *peri
+    v = v & ~(3 << 3)
+    v = v | (2 << 3)
+    v = v | (1 << 5)
+    v = v & ~(255 << 6)
+    *peri = v
+    // HP_RST_EN1 @ +0xc4 — RST_EN_RMT bit 23
+    let rst = cast(*mut volatile i32, 0x500E60C4)
+    *rst = *rst | (1 << 23)
+    *rst = *rst & ~(1 << 23)
+}
+
+/// Channel RAM base for TX `ch` (0..=3). Host-testable.
+fn rmt_mem_base_p4(ch: i32): i32 {
+    return 0x500A2800 + ch * 192
+}
+
+/// GPIO matrix signal for RMT TX `ch` (RMT_SIG_OUT0 = 246). Host-testable.
+fn rmt_sig_out_p4(ch: i32): i32 {
+    return 246 + ch
+}
+
+/// Tick Hz = `src_hz` / `ch_div` when group clock is PLL_F80M with integral div 1.
+pub fn rmt_tick_hz_p4(src_hz: i32, ch_div: i32): i32 {
+    return rmt_tick_hz_s3(src_hz, ch_div)
+}
+
+fn rmt_sys_conf_p4() {
+    // Direct mem, mem clock on, power up, sclk active, clk_en.
+    // Group source is HP_SYS_CLKRST (not SYS_CONF SCLK_SEL).
+    let sys = cast(*mut volatile i32, 0x500A20C0)
+    *sys = 1 | (1 << 1) | (1 << 3) | (1 << 26) | (1 << 31)
+}
+
+/// Configure GPIO `num` as RMT TX on channel `ch` (0..=3).
+/// `src_hz` is the group source (PLL_F80M typical 80_000_000 under IDF).
+/// Channel divider is fixed at 8 → tick = src_hz/8 (10 MHz @ 80 MHz).
+pub fn rmt_tx_p4(num: i32, ch: i32, src_hz: i32): Rmt {
+    let mut c = ch
+    if c < 0 {
+        c = 0
+    }
+    if c > 3 {
+        c = 3
+    }
+    system_rmt_enable_p4()
+    rmt_sys_conf_p4()
+    matrix_out_p4(num, rmt_sig_out_p4(c))
+
+    let conf0 = cast(*mut volatile i32, 0x500A2020 + c * 4)
+    let status = cast(*mut volatile i32, 0x500A2050 + c * 4)
+    let int_raw = cast(*mut volatile i32, 0x500A2070)
+    let int_clr = cast(*mut volatile i32, 0x500A207C)
+    let ch_div: i32 = 8
+
+    // idle low + enable; div_cnt=8; mem_size=1 block; carrier off (overwrite default)
+    *conf0 = (1 << 6) | (ch_div << 8) | (1 << 16)
+    *conf0 = *conf0 | (1 << 1) | (1 << 2)
+    *conf0 = (*conf0) & ~((1 << 1) | (1 << 2))
+
+    return Rmt{
+        conf0: conf0,
+        status: status,
+        int_raw: int_raw,
+        int_clr: int_clr,
+        mem_base: rmt_mem_base_p4(c),
+        ch: c,
+        tick_hz: rmt_tick_hz_p4(src_hz, ch_div)
+    }
+}
