@@ -12,7 +12,7 @@ ESP32-P4 GPIO + IO_MUX + LEDC + UART/I2C/SPI2/ADC1 + RMT). Boot and flash use
 Decision / catalog: [Klin issue 061](https://github.com/klin-lang/klin/blob/main/issues/061-micropython-machine-api.md),
 targets [062](https://github.com/klin-lang/klin/blob/main/issues/062-targets-esp-rp.md),
 S3 port [099](https://github.com/klin-lang/klin/blob/main/issues/099-machine-esp-esp32-s3.md),
-P4 Pin…Spi [114](https://github.com/klin-lang/klin/blob/main/issues/114-machine-esp-esp32-p4.md).
+P4 Pin…Spi+Rmt [114](https://github.com/klin-lang/klin/blob/main/issues/114-machine-esp-esp32-p4.md).
 
 ## Status
 
@@ -20,14 +20,14 @@ P4 Pin…Spi [114](https://github.com/klin-lang/klin/blob/main/issues/114-machin
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | **ESP32-C3** | `pin_out` / `pin_in` | `pwm_out` | `rc_out` | `uart_out` | `i2c_out` | `spi_out` | `adc_out` | — | — | `*_c3` | ESP-IDF v5.x |
 | **ESP32-S3** | `pin_out_s3` / `pin_in_s3` | `pwm_out_s3` | `rc_out_s3` | `uart_out_s3` | `i2c_out_s3` | `spi_out_s3` | `adc_out_s3` | `rmt_tx_s3` | — | `*_s3` | ESP-IDF v5.x |
-| **ESP32-P4** | `pin_out_p4` / `pin_in_p4` | `pwm_out_p4` | `rc_out_p4` | `uart_out_p4` | `i2c_out_p4` | `spi_out_p4` | later | later | — | `*_p4` | ESP-IDF v5.x |
+| **ESP32-P4** | `pin_out_p4` / `pin_in_p4` | `pwm_out_p4` | `rc_out_p4` | `uart_out_p4` | `i2c_out_p4` | `spi_out_p4` | later | `rmt_tx_p4` | — | `*_p4` | ESP-IDF v5.x |
 | Classic ESP32 (Xtensa), C6 | later | — | — | — | — | — | — | — | — | — |
 | Freestanding (no IDF) | later | — | — | — | — | — | — | — | — | — |
 
 C3 target board: **ESP32-C3-DevKitM-1** (onboard LED ≈ **GPIO8**).  
 S3 examples use **GPIO2** by default (Waveshare ESP32-S3-Pico D10 → GPIO35; WS2812 on GPIO21 is separate).  
 P4 examples use **GPIO2** by default (edit for your LED; do not reuse flash/PSRAM pads).  
-`version()` → `9` (`@v0.9.0`). P4 ADC oneshot is LP_ADC (not HP `0x500DE000`) — later tag, not this one.
+`version()` → `10` (`@v0.10.0`). P4 ADC oneshot is LP_ADC (not HP `0x500DE000`) — later tag.
 
 ### C3 vs S3 vs P4 (do not mix families in one binary)
 
@@ -60,11 +60,11 @@ machine_esp/
   pwm.kl / pwm_s3.kl / pwm_p4.kl / rc.kl / rc_s3.kl / rc_p4.kl
   uart.kl / uart_s3.kl / uart_p4.kl / i2c.kl / i2c_s3.kl / i2c_p4.kl
   spi.kl / spi_s3.kl / spi_p4.kl / adc.kl / adc_s3.kl
-  rmt_s3.kl               # S3 TX only (WS2812-style bit streams)
+  rmt_s3.kl / rmt_p4.kl   # TX only (WS2812-style bit streams)
   *_test.kl
 examples/*_c3/           # esp32c3
 examples/*_s3/           # esp32s3
-examples/*_p4/           # esp32p4 (Pin…Spi; no Adc/Rmt yet)
+examples/*_p4/           # esp32p4 (Pin…Spi+Rmt; no Adc yet)
 ```
 
 ## Usage — C3
@@ -107,11 +107,13 @@ let u = machine.uart_out_p4(0, 17, 18, 80000000, 115200)
 let bus = machine.i2c_out_p4(0, 8, 9, 40000000, 100000)
 let s = machine.spi_out_p4(2, 12, 11, 13, 80000000, 1000000, 0)
 let servo = machine.rc_out_p4(2, 0, 0, 80000000, 50, 1000, 2000)
+let rmt = machine.rmt_tx_p4(2, 0, 80000000)  // tick = PLL_F80M/8; put/start/wait_done
 ```
 
 `uart_out_p4` accepts instance **0..=4**. I2C0 only. SPI2 only. Soft SPI CS via a separate `Pin`.
 P4 LEDC timer bits differ from C3/S3 — call **`freq_p4`**, not `freq`.
-ADC / Rmt `*_p4` later. RMII Ethernet → [`esp_eth`](https://github.com/klin-lang/esp_eth) [104] E1 (not this package).
+P4 `rmt_tx_p4` is TX channels **0..=3** only (no DMA / carrier). ADC `*_p4` later.
+RMII Ethernet → [`esp_eth`](https://github.com/klin-lang/esp_eth) [104] E1 (not this package).
 
 ## Examples
 
@@ -124,7 +126,7 @@ make flash
 ```
 
 ```sh
-klin get github/klin-lang/machine_esp@v0.9.0
+klin get github/klin-lang/machine_esp@v0.10.0
 ```
 
 Wi‑Fi, NVS, and IDF peripheral drivers are **out of scope**.

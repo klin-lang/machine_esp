@@ -1,0 +1,19 @@
+module machine_esp
+
+import testing
+
+fn test_rmt_mem_base_p4() {
+    testing.assert_eq_i32(rmt_mem_base_p4(0), 0x500A2800)
+    testing.assert_eq_i32(rmt_mem_base_p4(1), 0x500A28C0)
+    testing.assert_eq_i32(rmt_mem_base_p4(3), 0x500A2A40)
+}
+
+fn test_rmt_sig_out_p4() {
+    testing.assert_eq_i32(rmt_sig_out_p4(0), 246)
+    testing.assert_eq_i32(rmt_sig_out_p4(3), 249)
+}
+
+fn test_rmt_tick_hz_p4() {
+    testing.assert_eq_i32(rmt_tick_hz_p4(80000000, 8), 10000000)
+    testing.assert_eq_i32(rmt_tick_hz_p4(80000000, 1), 80000000)
+}
