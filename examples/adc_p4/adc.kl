@@ -1,0 +1,18 @@
+// ESP32-P4 ADC1 CH0 = GPIO16 → LEDC PWM brightness on GPIO2.
+// Channel map: CH0→GPIO16 … CH7→GPIO23 (see adc_p4.kl).
+// Call read_u16_p4 / freq_p4 — not C3/S3 read_u16 / freq.
+import "../../machine_esp" machine
+
+@[cexport, codename("klin_app_main")]
+fn adc_main() {
+    let adc = machine.adc_out_p4(16, 0)
+    let led = machine.pwm_out_p4(2, 0, 0, 80000000)
+    led.freq_p4(1000)
+    while true {
+        led.duty_u16(adc.read_u16_p4())
+    }
+}
+
+fn main() {
+    adc_main()
+}
