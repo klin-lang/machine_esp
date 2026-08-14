@@ -3,7 +3,7 @@
 /// and `read_u12_p4` (C3/S3 `read_u12` is APB_SARADC; do not call it on P4).
 /// ADC1: CH0→GPIO16 … CH7→GPIO23.
 /// ADC2: CH0→GPIO49 … CH5→GPIO54 (IDF en_pad bit = channel+2).
-/// Clocks: LPPERI (not HP_SYS_CLKRST / SYSTEM). No regi2c in this tag.
+/// Clocks: LPPERI (not HP_SYS_CLKRST / SYSTEM). regi2c DREF: `adc_cal_init_p4`.
 module machine_esp
 
 /// Expected GPIO for ADC1 `channel` (0..=7). Out of range → −1.

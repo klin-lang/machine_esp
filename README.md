@@ -27,7 +27,7 @@ P4 Pin…Adc+Rmt [114](https://github.com/klin-lang/klin/blob/main/issues/114-ma
 C3 target board: **ESP32-C3-DevKitM-1** (onboard LED ≈ **GPIO8**).  
 S3 examples use **GPIO2** by default (Waveshare ESP32-S3-Pico D10 → GPIO35; WS2812 on GPIO21 is separate).  
 P4 examples use **GPIO2** by default (edit for your LED; do not reuse flash/PSRAM pads).  
-`version()` → `13` (`@v0.13.0`). LP GPIO 0..15: `pin_out_lp_p4` / `pin_in_lp_p4` (same pads as HP 0..15; do not mix with `pin_out_p4`). P4 ADC oneshot is **LP_ADC** — call **`read_u12_p4`**. ADC2: `adc2_out_p4`.
+`version()` → `14` (`@v0.14.0`). P4 SAR regi2c: `adc_cal_init_p4` (DREF; LP_I2C_ANA_MST `0x50124000`, slave `0x69`). LP GPIO 0..15: `pin_out_lp_p4`. P4 ADC oneshot is **LP_ADC** — call **`read_u12_p4`**. ADC2: `adc2_out_p4`.
 
 ### C3 vs S3 vs P4 (do not mix families in one binary)
 
@@ -38,7 +38,7 @@ P4 examples use **GPIO2** by default (edit for your LED; do not reuse flash/PSRA
 | GPIO / IO_MUX base | `0x60004000` / `0x60009000` | same band | HP `0x500E0000` / `0x500E1000`; LP `0x5012A000` / `0x5012B000` |
 | Peri clocks | SYSTEM `0x600C…` | SYSTEM `0x600C…` | **HP_SYS_CLKRST** `0x500E6000` (ADC oneshot: **LPPERI** `0x50120000`) |
 | LEDC timer | `freq` (C3/S3 layout) | `freq` | **`freq_p4`** (RST bit 24, CONF `@ +0x170`) |
-| ADC oneshot | APB_SARADC + `read_u12` | APB_SARADC + `read_u12` | **LP_ADC** + **`read_u12_p4`** (ADC1 CH0→GPIO16; ADC2 `adc2_out_p4` CH0→GPIO49) |
+| ADC oneshot | APB_SARADC + `read_u12` | APB_SARADC + `read_u12` | **LP_ADC** + **`read_u12_p4`** (ADC1 CH0→GPIO16; ADC2 `adc2_out_p4` CH0→GPIO49); regi2c `adc_cal_init_p4` |
 | Matrix simple-GPIO | `SIG_GPIO_OUT=128`, OEN bit 9 | `SIG_GPIO_OUT=256`, OEN bit 10 | `SIG_GPIO_OUT=256`, OEN bit 10 |
 | GPIO ≥ 32 | n/a | `OUT1` / `ENABLE1` / `IN1` | `OUT1` / `ENABLE1` / `IN1` |
 | On-die Wi‑Fi/BLE | yes | yes | **no** (companion / other host) |
@@ -60,7 +60,7 @@ machine_esp/
   pin.kl / pin_s3.kl / pin_p4.kl / pin_lp_p4.kl
   pwm.kl / pwm_s3.kl / pwm_p4.kl / rc.kl / rc_s3.kl / rc_p4.kl
   uart.kl / uart_s3.kl / uart_p4.kl / i2c.kl / i2c_s3.kl / i2c_p4.kl
-  spi.kl / spi_s3.kl / spi_p4.kl / adc.kl / adc_s3.kl / adc_p4.kl
+  spi.kl / spi_s3.kl / spi_p4.kl / adc.kl / adc_s3.kl / adc_p4.kl / adc_cal_p4.kl
   rmt_s3.kl / rmt_p4.kl   # TX only (WS2812-style bit streams)
   *_test.kl
 examples/*_c3/           # esp32c3
@@ -110,6 +110,7 @@ let bus = machine.i2c_out_p4(0, 8, 9, 40000000, 100000)
 let s = machine.spi_out_p4(2, 12, 11, 13, 80000000, 1000000, 0)
 let servo = machine.rc_out_p4(2, 0, 0, 80000000, 50, 1000, 2000)
 let rmt = machine.rmt_tx_p4(2, 0, 80000000)  // tick = PLL_F80M/8; put/start/wait_done
+machine.adc_cal_init_p4()                    // regi2c DREF=4; not inside adc_out_p4
 let adc = machine.adc_out_p4(16, 0)          // ADC1 CH0 → GPIO16; read_u12_p4
 let adc2 = machine.adc2_out_p4(49, 0)        // ADC2 CH0 → GPIO49
 ```
@@ -118,6 +119,7 @@ let adc2 = machine.adc2_out_p4(49, 0)        // ADC2 CH0 → GPIO49
 P4 LEDC timer bits differ from C3/S3 — call **`freq_p4`**, not `freq`.
 P4 `rmt_tx_p4` is TX channels **0..=3** only (no DMA / carrier).
 P4 ADC is LP_ADC — call **`read_u12_p4`**, not `read_u12`. ADC1 CH0→GPIO16 … CH7→GPIO23; ADC2 CH0→GPIO49 … CH5→GPIO54.
+P4 SAR regi2c: **`adc_cal_init_p4`** (DREF=4), **`adc_cal_init_code_p4`**, **`adc_cal_encal_gnd_p4`** — LP_I2C_ANA_MST, not C3/S3 I2C_MST. No eFuse curve-fit.
 LP GPIO 0..15: **`pin_out_lp_p4` / `pin_in_lp_p4`** — same pads as HP 0..15; do not call both on one pad. No hold/wakeup in this tag.
 RMII Ethernet → [`esp_eth`](https://github.com/klin-lang/esp_eth) [104] E1 (not this package).
 
@@ -125,14 +127,14 @@ RMII Ethernet → [`esp_eth`](https://github.com/klin-lang/esp_eth) [104] E1 (no
 
 ```sh
 . $IDF_PATH/export.sh
-cd examples/blink_p4   # or blink_lp_p4 / blink_s3 / pwm_s3 / … / blink_c3 / …
+cd examples/blink_p4   # or adc_cal_p4 / blink_lp_p4 / blink_s3 / … / blink_c3 / …
 make emit KLIN=/path/to/klin/bin/klin.dart
 make build
 make flash
 ```
 
 ```sh
-klin get github/klin-lang/machine_esp@v0.13.0
+klin get github/klin-lang/machine_esp@v0.14.0
 ```
 
 Wi‑Fi, NVS, and IDF peripheral drivers are **out of scope**.
