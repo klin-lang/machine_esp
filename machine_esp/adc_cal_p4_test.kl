@@ -1,0 +1,45 @@
+module machine_esp
+
+import testing
+
+fn test_adc_cal_p4_unit_ok() {
+    testing.assert_eq_i32(adc_cal_p4_unit_ok(1), 1)
+    testing.assert_eq_i32(adc_cal_p4_unit_ok(2), 1)
+    testing.assert_eq_i32(adc_cal_p4_unit_ok(0), 0)
+    testing.assert_eq_i32(adc_cal_p4_unit_ok(3), 0)
+}
+
+fn test_regi2c_p4_bases() {
+    testing.assert_eq_i32(regi2c_p4_base(), 0x50124000)
+    testing.assert_eq_i32(regi2c_p4_ctrl_reg(), 0x50124000)
+    testing.assert_eq_i32(regi2c_p4_ana_conf1_reg(), 0x5012401C)
+    testing.assert_eq_i32(regi2c_p4_ana_conf2_reg(), 0x50124020)
+    testing.assert_eq_i32(regi2c_p4_clk160m_reg(), 0x50124034)
+    testing.assert_eq_i32(regi2c_p4_pmu_rf_pwc(), 0x5011515C)
+    testing.assert_eq_i32(regi2c_p4_sar_slave(), 0x69)
+    testing.assert_eq_i32(regi2c_p4_sar_mst_sel(), 1 << 7)
+}
+
+fn test_regi2c_p4_cmd_pack() {
+    testing.assert_eq_i32(regi2c_p4_cmd(0x69, 2, 0, 0), 0x69 | (2 << 8))
+    testing.assert_eq_i32(regi2c_p4_cmd(0x69, 2, 4, 1), 0x69 | (2 << 8) | (4 << 16) | (1 << 24))
+}
+
+fn test_regi2c_p4_mask_insert() {
+    testing.assert_eq_i32(regi2c_p4_mask_insert(0, 6, 4, 4), 4 << 4)
+    testing.assert_eq_i32(regi2c_p4_mask_insert(255, 6, 4, 0), 255 & ~(7 << 4))
+    testing.assert_eq_i32(regi2c_p4_mask_insert(0, 7, 0, 0xAB), 0xAB)
+}
+
+fn test_regi2c_p4_init_code_split() {
+    testing.assert_eq_i32(regi2c_p4_init_code_lsb(0x123), 0x23)
+    testing.assert_eq_i32(regi2c_p4_init_code_msb(0x123), 1)
+    testing.assert_eq_i32(regi2c_p4_init_code_lsb(0), 0)
+    testing.assert_eq_i32(regi2c_p4_init_code_msb(4095), 15)
+}
+
+fn test_regi2c_p4_sar_field_addrs() {
+    testing.assert_eq_i32(regi2c_p4_sar1_dref_reg(), 2)
+    testing.assert_eq_i32(regi2c_p4_sar2_dref_reg(), 5)
+    testing.assert_eq_i32(regi2c_p4_encal_reg(), 7)
+}
